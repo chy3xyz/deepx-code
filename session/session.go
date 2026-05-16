@@ -124,33 +124,43 @@ func (m *Manager) Append(role, content string) error {
 //
 // "1 个 turn" 的定义:一条 user message 加它后续的 assistant 回复(可能多条 assistant
 // 段或被工具调用插开,但本会话文件只记 content,所以约等于 1 个 user + 1 个 assistant)。
-// 实现简化:反向数 user 出现次数到 n,从该 user 起截断。
+//
+// 实现:文件按日期降序遍历,每个文件读完后从尾部反向扫,边扫边累积。
+// 一旦凑够 n 个 user 立即返回,避免把 180 天历史全读进内存。
+// 热路径(N=20 且当天就够)只读 1 个文件;稀疏使用时回退到读多个文件。
 func (m *Manager) LoadRecentTurns(n int) []Entry {
 	if n <= 0 {
 		return nil
 	}
 	files, _ := filepath.Glob(filepath.Join(m.rootDir, "*.jsonl"))
-	sort.Strings(files) // 升序;旧 → 新
-	var all []Entry
-	for _, f := range files {
-		all = append(all, readJSONL(f)...)
-	}
-	if len(all) == 0 {
-		return nil
-	}
-	// 反向数 user,凑够 n 个就在 user 之前切
+	sort.Sort(sort.Reverse(sort.StringSlice(files))) // 新 → 旧
+
+	// collected 按"新到旧"顺序累积(反向序),最后整体翻转一次成时间正序。
+	var collected []Entry
 	userCount := 0
-	cut := 0
-	for i := len(all) - 1; i >= 0; i-- {
-		if all[i].Role == "user" {
-			userCount++
-			if userCount == n {
-				cut = i
-				break
+	for _, fp := range files {
+		entries := readJSONL(fp)
+		for i := len(entries) - 1; i >= 0; i-- {
+			collected = append(collected, entries[i])
+			if entries[i].Role == "user" {
+				userCount++
+				if userCount >= n {
+					reverseEntries(collected)
+					return collected
+				}
 			}
 		}
 	}
-	return all[cut:]
+	// 历史不够 n turn,把已有的全返回
+	reverseEntries(collected)
+	return collected
+}
+
+// reverseEntries 就地翻转 slice,O(n) 无分配。
+func reverseEntries(s []Entry) {
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
 }
 
 // Search 在当前 session 下扫描所有 jsonl,按关键词命中。

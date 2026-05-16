@@ -1,5 +1,7 @@
 # deepx
 
+> 核心亮点，增加本地OCR，补齐 DeepSeek 不支持图片识别的最大短板。
+
 AI 代码助手 —— Go 写的 TUI,跑在任何 OpenAI 兼容的 LLM 上,默认对接 DeepSeek。
 
 类似 Claude Code 类工具,定位上更轻:单二进制、纯键盘、聚焦中文用户、强调 token 经济。

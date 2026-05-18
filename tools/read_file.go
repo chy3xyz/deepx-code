@@ -56,7 +56,7 @@ func ReadFile(args map[string]any) ToolResult {
 
 	var sb strings.Builder
 	for i := offset - 1; i < end; i++ {
-		fmt.Fprintf(&sb, "%6d\t%s\n", i+1, lines[i])
+		fmt.Fprintf(&sb, "%6d │ %s\n", i+1, lines[i])
 	}
 	if end < len(lines) {
 		fmt.Fprintf(&sb, "... (共 %d 行，已显示 %d-%d)\n", len(lines), offset, end)

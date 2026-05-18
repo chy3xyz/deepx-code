@@ -160,10 +160,20 @@ else
     step "Resolving version"
     if [ -z "$VERSION" ]; then
         info "Querying latest release from GitHub..."
-        # 走重定向能拿到 tag 名;不依赖 jq,纯 grep
         LATEST_URL="https://api.github.com/repos/${OWNER}/${REPO}/releases/latest"
-        VERSION=$(curl -fsSL -H "Accept: application/vnd.github+json" "$LATEST_URL" \
-            | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
+        # 先写到临时文件再解析,避免 curl | grep 管道断写导致 (23) 错误
+        VERSION_FILE=$(mktemp)
+        if ! curl -fsSL --connect-timeout 10 --max-time 15 \
+            -H "Accept: application/vnd.github+json" "$LATEST_URL" -o "$VERSION_FILE"; then
+            rm -f "$VERSION_FILE"
+            error "无法查询最新版本。可能是网络问题或 GitHub API 限频(未认证:60次/小时/IP)。"
+            info "方案1: 稍后重试"
+            info "方案2: 设置 GITHUB_TOKEN 环境变量提高 API 配额"
+            info "方案3: 用 --version v0.x.y 显式指定版本(跳过查询)"
+            exit 1
+        fi
+        VERSION=$(grep -m1 '"tag_name"' "$VERSION_FILE" | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
+        rm -f "$VERSION_FILE"
         if [ -z "$VERSION" ]; then
             error "无法解析最新版本。请用 --version v0.1.0 显式指定。"
             exit 1
@@ -187,7 +197,7 @@ else
     TMPDIR=$(mktemp -d)
     trap 'rm -rf "$TMPDIR"' EXIT
     info "URL: ${URL}"
-    if ! curl -fsSL "$URL" -o "$TMPDIR/$ASSET"; then
+    if ! curl -fsSL --connect-timeout 10 --max-time 60 "$URL" -o "$TMPDIR/$ASSET"; then
         error "下载失败。常见原因:版本号不存在,或该平台没出包。"
         info "可在浏览器查看可用资产:https://github.com/${OWNER}/${REPO}/releases/tag/${VERSION}"
         exit 1

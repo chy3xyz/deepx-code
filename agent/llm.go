@@ -49,7 +49,7 @@ type TokenMsg string                  // 助手正式回复(content)的文本增
 type ReasoningTokenMsg string         // 模型思考过程(reasoning_content)增量,TUI 用它驱动 spinner,不展示文字
 type StreamErrMsg struct{ Err error } // 错误
 type StreamDoneMsg struct{}           // 整个会话回合结束
-type ToolCallStartMsg struct { // 即将调用工具
+type ToolCallStartMsg struct {        // 即将调用工具
 	Name     string
 	Args     string
 	ReviewCh chan bool // review 模式下的审核通道,nil = 无需审核

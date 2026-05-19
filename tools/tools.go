@@ -158,7 +158,7 @@ var Tools = []Tool{
 		},
 		Executor: EditFile,
 		ReadOnly: false,
-		},
+	},
 	{
 		Name:        "Glob",
 		Description: "按 glob 模式查找文件，支持 ** 递归通配，结果按修改时间倒序返回。",
@@ -303,14 +303,11 @@ var Tools = []Tool{
 	},
 	{
 		Name: "LoadSkill",
-		Description: "加载一个 skill (用户预定义的指令包) 的完整正文塞进上下文。" +
-			"\n\n**何时调用**:" +
-			"\n- 你看 system prompt 里的 \"Available Skills\" 列表,判断哪些 skill 的 description 跟当前任务对得上" +
-			"\n- 比如用户让你写 Go 代码,而列表里有 `go-style: 写 Go 时遵循的命名/错误处理规约`,就调一次 LoadSkill(name=\"go-style\")" +
-			"\n- 一个回合内可以连续调多个,加载多个相关 skill" +
-			"\n\n**何时别调**:" +
-			"\n- 没有任何 skill 跟当前任务相关 —— 不要硬调" +
-			"\n- 同一 skill 本会话已加载过(history 里能看到 tool result)—— 不要重复",
+		Description: "读取一个 skill 的完整内容。" +
+			"当 system prompt 的 Available Skills 列表中，有 skill 的 description 与当前任务匹配时调用。" +
+			"同一回合内可连续调用多个相关 skill。" +
+			"没有匹配的 skill 时不要调用。" +
+			"同一 skill 在本会话内只调用一次。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{

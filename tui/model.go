@@ -185,6 +185,7 @@ func initialModel(models agent.ModelConfig, needsSetup bool) model {
 	// workspace 优先于 global,同名覆盖。任一目录不存在不报错。
 	// 用户没建任何 skill 时 catalog 为空,system prompt 不挂"Available Skills"段。
 	home, _ := os.UserHomeDir()
+	skill.ExtractBuiltins(home) // 解压内嵌 skill 到 ~/.deepx/skills/
 	workspaceSkillDirs := []string{
 		filepath.Join(wd, ".deepx", "skills"),
 	}

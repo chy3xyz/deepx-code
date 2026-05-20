@@ -18,7 +18,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/glamour/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -104,13 +104,10 @@ type model struct {
 	// scrollbarDragging: 左键在滚动条列按下且未松开。该状态下 motion 事件 → SetYOffset。
 	scrollbarDragging bool
 
-	// markdown 实时渲染:每次 refresh 都会用 glamour 重渲整段 chatContent。
-	// glamour.NewTermRenderer 是有状态的(配 word wrap 宽度),所以按 width 缓存,
-	// width 没变就复用同一个 renderer,避免每帧重建。
-	mdRenderer      *glamour.TermRenderer
-	mdRendererWidth int
-	mdCache         string // 上次渲染的 markdown 输出
-	mdCacheLen      int    // 上次渲染时的 chatContent 长度
+	// markdown 实时渲染缓存:内容不变且宽度不变时复用,避免每帧重渲。
+	mdCache      string
+	mdCacheLen   int
+	mdCacheWidth int
 
 	// session 是当前 workspace 的持久化句柄。启动时建/打开 ~/.deepx/sessions/{sid}/,
 	// 写时机:user enter 后 + assistant 流结束(StreamDoneMsg)时各 append 一行。
@@ -1428,47 +1425,366 @@ func (m *model) collectSelectionText() string {
 	return extractSelectionText(content, m.selAnchor, m.selEnd, w)
 }
 
-// renderMarkdown 用 glamour 把 chatContent 转成 styled ANSI 输出。
-//
-// 关键预处理:剥掉 chatContent 里已有的 ANSI 转义(deepxPrefix 这种 lipgloss 着色)。
-// glamour 不认 ANSI,会把 \x1b[31m 这种字节当成 literal 字符喷出来,
-// 终端就显示 "[31m..." 这种乱码 / VSCode 直接渲染崩。
-// 代价:loss deepxPrefix 的蓝色加粗,但 glamour 自己会把 markdown 加粗/标题/列表样式补回来。
+// renderMarkdown 把 chatContent 转成 styled ANSI 输出。
+// 关键预处理:ansi.Strip 剥掉 chatContent 里已有的 ANSI 转义(如 deepxPrefix 的着色),
+// 避免下游再次被当 literal 处理。代价:丢 prefix 蓝色加粗,但 **bold** 标记会让 prefix 重新粗体。
+// 支持: **bold** / *italic* / `code` / ### heading / --- / - list / ``` code blocks。
+// 末尾用 ansi.Wrap 按 width 软换行,等价于旧 glamour 的 WithWordWrap。
 func (m *model) renderMarkdown(content string, width int) string {
 	if width <= 0 || content == "" {
 		return content
 	}
 	content = ansi.Strip(content)
-	if m.mdRenderer == nil || m.mdRendererWidth != width {
-		r, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle("dark"),
-			glamour.WithWordWrap(width),
-		)
-		if err != nil {
-			return content
+
+	// 定义 ANSI style 生成器
+	bold := lipgloss.NewStyle().Bold(true).Render
+	italic := lipgloss.NewStyle().Italic(true).Render
+	code := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render
+	dim := lipgloss.NewStyle().Foreground(dimColor).Render
+	heading := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render
+	divider := dim(strings.Repeat("─", width))
+
+	lines := strings.Split(content, "\n")
+	var out []string
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+
+		// 代码块: look-ahead 寻找匹配的 close fence。找到才进 code-block 模式,
+		// 否则当普通行处理。这样 LLM 输出的未闭合 fence(stream 截断 / hallucinate)
+		// 不会让整段后续内容被 dim 当作代码 —— 用户复现过历史会话里 fence 奇数 →
+		// 表格、bold 标记全被 dim 字面化的 bug。
+		if strings.HasPrefix(line, "~~~") || strings.HasPrefix(line, "```") {
+			marker := line[:3]
+			closeIdx := -1
+			// 扫到下一个 rolePrefix 行或者 marker 闭合;rolePrefix 是消息硬边界,
+			// 跨边界的 fence 一律视为未闭合,避免上一条消息污染下一条。
+			for j := i + 1; j < len(lines); j++ {
+				if isMessagePrefix(lines[j]) {
+					break
+				}
+				if strings.HasPrefix(lines[j], marker) {
+					closeIdx = j
+					break
+				}
+			}
+			if closeIdx > i {
+				for k := i; k <= closeIdx; k++ {
+					out = append(out, dim(lines[k]))
+				}
+				i = closeIdx
+				continue
+			}
+			// 未闭合:fence 行本身渲染成 dim,但不进入 code-block 状态
+			out = append(out, dim(line))
+			continue
 		}
-		m.mdRenderer = r
-		m.mdRendererWidth = width
+
+		empty := strings.TrimSpace(line) == ""
+
+		// 空行:段落分隔
+		if empty {
+			out = append(out, "")
+			continue
+		}
+
+		// 分隔线 ---
+		if strings.TrimSpace(line) == "---" {
+			out = append(out, divider)
+			continue
+		}
+
+		// GFM table:header 行起手 `|`,下一行是对齐行(`|:---|---:|...|`)。
+		// 收集到下一条非 `|` 起手的行作为表格结束,renderTable 用 lipgloss 画 unicode 边框。
+		if strings.HasPrefix(strings.TrimSpace(line), "|") && i+1 < len(lines) && isTableSeparator(lines[i+1]) {
+			end := i + 2
+			for end < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[end]), "|") {
+				end++
+			}
+			out = append(out, renderTable(lines[i:end], bold, italic, code, dim))
+			i = end - 1
+			continue
+		}
+
+		// 标题 ## 或 ###
+		trimmed := line
+		level := 0
+		for strings.HasPrefix(trimmed, "#") {
+			level++
+			trimmed = strings.TrimLeft(trimmed, "# ")
+		}
+		if level > 0 && trimmed != "" {
+			out = append(out, heading(trimmed))
+			continue
+		}
+
+		// 列表项 - 或 *
+		if len(line) > 2 && (line[0] == '-' || line[0] == '*') && line[1] == ' ' {
+			rest := line[2:]
+			rest = renderInline(rest, bold, italic, code)
+			out = append(out, dim(" • ")+rest)
+			continue
+		}
+
+		// 普通段落:行内渲染
+		rendered := renderInline(line, bold, italic, code)
+		out = append(out, rendered)
 	}
-	out, err := m.mdRenderer.Render(content)
-	if err != nil {
-		return content
+
+	// ansi.Wrap 对每行按 width 软换行,保留 ANSI styling。
+	// 旧 glamour 用 WithWordWrap 做这事,迁移后必须手动补上,否则长行溢出 viewport。
+	return ansi.Wrap(strings.Join(out, "\n"), width, " -")
+}
+
+// isMessagePrefix 判断一行是否以已知 rolePrefix 起手(deepx / 用户 / system / 兜底 role)。
+// 用于在 message 边界强制重置 inCodeBlock,避免上一条消息里的未闭合 fence 污染下一条。
+// 匹配:`**🐋 deepx**: ...`、`**👤 我**: ...`、`**⚙ System**: ...`、`**<word>**: ...`。
+func isMessagePrefix(line string) bool {
+	if !strings.HasPrefix(line, "**") {
+		return false
 	}
-	return out
+	// 在前 60 字节内找 "**:" 或 "**: ",保证 prefix 形态。content 里 **bold**: 这种
+	// 巧合命中概率低,且即使误命中也只是多关一次 code block,对正常文本无副作用。
+	scan := line
+	if len(scan) > 60 {
+		scan = scan[:60]
+	}
+	return strings.Contains(scan[2:], "**:")
+}
+
+// splitTableRow 把 `| a | b | c |` 切成 ["a", "b", "c"]。
+// 不严格校验 escape(`\|`)— 当前 deepx 场景 LLM 几乎不会输出 escaped pipe。
+func splitTableRow(row string) []string {
+	row = strings.TrimSpace(row)
+	if !strings.HasPrefix(row, "|") {
+		return nil
+	}
+	row = strings.TrimPrefix(row, "|")
+	row = strings.TrimSuffix(row, "|")
+	return strings.Split(row, "|")
+}
+
+// isTableSeparator 判断行是否是 GFM 表格对齐行,如 `|:---|---:|:---:|`。
+// 要求每个 cell 只含 `-` 和 `:`,且非空。
+func isTableSeparator(row string) bool {
+	cells := splitTableRow(row)
+	if len(cells) == 0 {
+		return false
+	}
+	for _, c := range cells {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			return false
+		}
+		for _, r := range c {
+			if r != '-' && r != ':' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// renderTable 把 GFM table 行渲染成 unicode 框线表格。
+// rows[0] 是 header,rows[1] 是对齐行(消费掉、不输出),rows[2:] 是 body。
+// 每个 cell 走 renderInline,所以 `**bold**`/`` `code` ``/`*italic*` 在表格里也工作。
+// 列宽按 cell 显示宽度的列向最大值取(用 lineDisplayWidth 测,emoji 强制 2 cell)。
+func renderTable(rows []string, bold, italic, code, dim func(...string) string) string {
+	if len(rows) < 2 {
+		return strings.Join(rows, "\n")
+	}
+	parsed := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		cells := splitTableRow(row)
+		if len(cells) > 0 {
+			parsed = append(parsed, cells)
+		}
+	}
+	if len(parsed) < 2 {
+		return strings.Join(rows, "\n")
+	}
+
+	// 对齐:`:---` left, `---:` right, `:---:` center
+	alignCells := parsed[1]
+	aligns := make([]string, len(alignCells))
+	for i, c := range alignCells {
+		c = strings.TrimSpace(c)
+		leftBias := strings.HasPrefix(c, ":")
+		rightBias := strings.HasSuffix(c, ":")
+		switch {
+		case leftBias && rightBias:
+			aligns[i] = "center"
+		case rightBias:
+			aligns[i] = "right"
+		default:
+			aligns[i] = "left"
+		}
+	}
+
+	data := make([][]string, 0, len(parsed)-1)
+	data = append(data, parsed[0])
+	data = append(data, parsed[2:]...)
+
+	numCols := 0
+	for _, r := range data {
+		if len(r) > numCols {
+			numCols = len(r)
+		}
+	}
+	for len(aligns) < numCols {
+		aligns = append(aligns, "left")
+	}
+
+	// 预渲染所有 cell + 测宽
+	cells := make([][]string, len(data))
+	widths := make([][]int, len(data))
+	colW := make([]int, numCols)
+	for i, r := range data {
+		cells[i] = make([]string, numCols)
+		widths[i] = make([]int, numCols)
+		for c := 0; c < numCols; c++ {
+			raw := ""
+			if c < len(r) {
+				raw = strings.TrimSpace(r[c])
+			}
+			cells[i][c] = renderInline(raw, bold, italic, code)
+			w := lineDisplayWidth(cells[i][c])
+			widths[i][c] = w
+			if w > colW[c] {
+				colW[c] = w
+			}
+		}
+	}
+
+	var sb strings.Builder
+	drawSep := func(left, mid, right string) {
+		sb.WriteString(dim(left))
+		for c := 0; c < numCols; c++ {
+			sb.WriteString(dim(strings.Repeat("─", colW[c]+2)))
+			if c < numCols-1 {
+				sb.WriteString(dim(mid))
+			}
+		}
+		sb.WriteString(dim(right))
+	}
+	drawRow := func(rowCells []string, rowWidths []int) {
+		sb.WriteString(dim("│"))
+		for c := 0; c < numCols; c++ {
+			pad := colW[c] - rowWidths[c]
+			if pad < 0 {
+				pad = 0
+			}
+			switch aligns[c] {
+			case "right":
+				sb.WriteString(" " + strings.Repeat(" ", pad) + rowCells[c] + " ")
+			case "center":
+				lp := pad / 2
+				rp := pad - lp
+				sb.WriteString(" " + strings.Repeat(" ", lp) + rowCells[c] + strings.Repeat(" ", rp) + " ")
+			default:
+				sb.WriteString(" " + rowCells[c] + strings.Repeat(" ", pad) + " ")
+			}
+			sb.WriteString(dim("│"))
+		}
+	}
+
+	drawSep("┌", "┬", "┐")
+	sb.WriteString("\n")
+	drawRow(cells[0], widths[0])
+	sb.WriteString("\n")
+	drawSep("├", "┼", "┤")
+	for i := 1; i < len(cells); i++ {
+		sb.WriteString("\n")
+		drawRow(cells[i], widths[i])
+	}
+	sb.WriteString("\n")
+	drawSep("└", "┴", "┘")
+	return sb.String()
+}
+
+// renderInline 处理行内 markdown 标记: **bold** / *italic* / `code`
+func renderInline(s string, bold, italic, code func(...string) string) string {
+	var buf strings.Builder
+	runes := []rune(s)
+	i := 0
+	for i < len(runes) {
+		// ```inline code``` — 优先匹配较长 fence
+		if i+2 < len(runes) && runes[i] == '`' && runes[i+1] == '`' && runes[i+2] == '`' {
+			end := findClosing(runes, i+3, '`', '`', '`')
+			if end >= 0 {
+				buf.WriteString(code(string(runes[i+3 : end])))
+				i = end + 3
+				continue
+			}
+		}
+		// `inline code`
+		if runes[i] == '`' {
+			end := findClosing(runes, i+1, '`')
+			if end >= 0 {
+				buf.WriteString(code(string(runes[i+1 : end])))
+				i = end + 1
+				continue
+			}
+		}
+		// **bold**
+		if i+1 < len(runes) && runes[i] == '*' && runes[i+1] == '*' {
+			end := findClosing(runes, i+2, '*', '*')
+			if end >= 0 {
+				buf.WriteString(bold(string(runes[i+2 : end])))
+				i = end + 2
+				continue
+			}
+		}
+		// *italic*
+		if runes[i] == '*' {
+			end := findClosing(runes, i+1, '*')
+			if end >= 0 {
+				buf.WriteString(italic(string(runes[i+1 : end])))
+				i = end + 1
+				continue
+			}
+		}
+		buf.WriteRune(runes[i])
+		i++
+	}
+	return buf.String()
+}
+
+// findClosing 在切片 runes[start:] 找连续 N 个 target rune,返回结束索引(不含)。
+// 找不到返回 -1。
+func findClosing(runes []rune, start int, targets ...rune) int {
+	n := len(targets)
+	if start+n > len(runes) {
+		return -1
+	}
+	for i := start; i <= len(runes)-n; i++ {
+		match := true
+		for j := 0; j < n; j++ {
+			if runes[i+j] != targets[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *model) refreshViewport() {
 	atBottom := m.chatViewport.AtBottom()
 	w := m.chatViewport.Width()
 
-	// 增量重渲:内容不变且宽度不变时复用缓存,避免滚动/鼠标/resize 触发
-	// glamour 全量重渲(对话长时开销巨大)。
+	// 增量重渲:内容变化或宽度变化或首次渲染时重渲,否则复用缓存。
+	// resize 必须重渲 —— 分隔线宽度和 wrap 列数都依赖 w。
 	var content string
-	if m.chatContent.Len() != m.mdCacheLen || m.mdRendererWidth != w || m.mdCache == "" {
+	if m.chatContent.Len() != m.mdCacheLen || m.mdCacheWidth != w || m.mdCache == "" {
 		raw := ensureEmojiSpacing(m.chatContent.String())
 		rendered := m.renderMarkdown(raw, w)
 		m.mdCache = ensureEmojiSpacingANSI(rendered)
 		m.mdCacheLen = m.chatContent.Len()
+		m.mdCacheWidth = w
 		content = m.mdCache
 	} else {
 		content = m.mdCache

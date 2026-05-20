@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DeepX — AI 代码助手，跑在你的终端里</title>
+    <title>DeepX — 本地优先的 AI 编码 agent</title>
     <meta
       name="description"
-      content="DeepX 是 Go 写的 TUI AI 代码助手，跑在任何 OpenAI 兼容的 LLM 上，默认对接 DeepSeek。单二进制、纯键盘、聚焦中文用户。"
+      content="DeepX 是 Go 写的 TUI AI 编码 agent，跑在任何 OpenAI 兼容的 LLM 上。完整上下文恢复、零延迟路由、DeepSeek 原生缓存友好。"
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;0,800;1,400&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <style>
@@ -28,17 +28,21 @@
         --bg-card: #0e0e0e;
         --bg-elevated: #141414;
         --fg: #c8c8c8;
-        --fg-dim: #707070;
+        --fg-dim: #686868;
+        --fg-muted: #505050;
         --green: #00e541;
-        --green-dim: #00c037;
+        --green-dim: #00b832;
+        --green-subtle: rgba(0, 229, 65, 0.08);
         --amber: #f0a000;
-        --amber-dim: #c08000;
         --red: #ff4444;
         --cyan: #00d4d4;
+        --blue: #4080ff;
         --border: #1a1a1a;
+        --border-hover: #2a2a2a;
         --font-mono: "JetBrains Mono", monospace;
         --font-sans: "Noto Sans SC", system-ui, sans-serif;
         --max-w: 1100px;
+        --radius: 8px;
       }
       html {
         scroll-behavior: smooth;
@@ -52,15 +56,15 @@
         overflow-x: hidden;
       }
 
-      /* ── Noise Overlay ── */
+      /* ── CRT Overlay ── */
       body::before {
         content: "";
         position: fixed;
         inset: 0;
         z-index: 9999;
         pointer-events: none;
-        opacity: 0.035;
-        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        opacity: 0.025;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.7' numOctaves='5' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
       }
 
       /* ── Scanlines ── */
@@ -73,8 +77,8 @@
           0deg,
           transparent,
           transparent 2px,
-          rgba(0, 0, 0, 0.03) 2px,
-          rgba(0, 0, 0, 0.03) 4px
+          rgba(0, 0, 0, 0.04) 2px,
+          rgba(0, 0, 0, 0.04) 4px
         );
       }
 
@@ -88,8 +92,31 @@
         padding: 100px 0;
         position: relative;
       }
-
-      /* ── Grid BG ── */
+      .section-label {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--green);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+        display: block;
+      }
+      h2 {
+        font-family: var(--font-mono);
+        font-size: clamp(28px, 4vw, 40px);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin-bottom: 16px;
+        color: #fff;
+      }
+      .section-sub {
+        color: var(--fg-dim);
+        font-size: 15px;
+        line-height: 1.7;
+        max-width: 600px;
+        margin-bottom: 48px;
+      }
       .grid-bg {
         position: absolute;
         inset: 0;
@@ -98,206 +125,19 @@
         z-index: 0;
         opacity: 0.03;
         background-image:
-          linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+          linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
         background-size: 60px 60px;
       }
 
       /* ── Typography ── */
-      h1,
-      h2,
-      h3,
-      .mono {
+      h1, h2, h3, .mono {
         font-family: var(--font-mono);
-      }
-      h2 {
-        font-size: clamp(28px, 4vw, 40px);
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        margin-bottom: 48px;
-        color: #fff;
-      }
-      h3 {
-        font-size: 16px;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        color: #fff;
-        margin-bottom: 8px;
-      }
-      .section-label {
-        font-family: var(--font-mono);
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--green);
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        margin-bottom: 16px;
-        display: block;
       }
       p {
         line-height: 1.75;
         color: var(--fg-dim);
         font-size: 15px;
-      }
-
-      /* ── Hero ── */
-      .hero {
-        padding: 120px 0 80px;
-        text-align: center;
-        position: relative;
-        overflow: hidden;
-      }
-      .hero .grid-bg {
-        opacity: 0.04;
-      }
-      .hero-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        background: rgba(0, 229, 65, 0.08);
-        border: 1px solid rgba(0, 229, 65, 0.15);
-        border-radius: 100px;
-        padding: 6px 18px;
-        font-family: var(--font-mono);
-        font-size: 12px;
-        color: var(--green);
-        margin-bottom: 32px;
-      }
-      .hero-badge .dot {
-        width: 6px;
-        height: 6px;
-        background: var(--green);
-        border-radius: 50%;
-        animation: pulse-dot 2s infinite;
-      }
-      @keyframes pulse-dot {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.3;
-        }
-      }
-      .hero h1 {
-        font-size: clamp(40px, 7vw, 72px);
-        font-weight: 800;
-        letter-spacing: -0.03em;
-        color: #fff;
-        line-height: 1.1;
-        margin-bottom: 24px;
-      }
-      .hero h1 .accent {
-        color: var(--green);
-      }
-      .hero .tagline {
-        font-family: var(--font-mono);
-        font-size: clamp(14px, 2vw, 18px);
-        color: var(--fg-dim);
-        max-width: 600px;
-        margin: 0 auto 48px;
-        line-height: 1.6;
-      }
-      .hero .tagline .cursor {
-        display: inline-block;
-        width: 10px;
-        height: 1.2em;
-        background: var(--green);
-        vertical-align: text-bottom;
-        margin-left: 2px;
-        animation: blink 1s step-end infinite;
-      }
-      @keyframes blink {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0;
-        }
-      }
-
-      /* ── Terminal Mockup ── */
-      .term-wrap {
-        max-width: 700px;
-        margin: 0 auto;
-        position: relative;
-        z-index: 1;
-      }
-      .term {
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        overflow: hidden;
-        text-align: left;
-        box-shadow:
-          0 20px 60px rgba(0, 0, 0, 0.5),
-          0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-          0 0 80px rgba(0, 229, 65, 0.03);
-      }
-      .term-bar {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 14px 18px;
-        background: rgba(255, 255, 255, 0.02);
-        border-bottom: 1px solid var(--border);
-      }
-      .term-bar span {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-      }
-      .term-bar .t-red {
-        background: var(--red);
-      }
-      .term-bar .t-amber {
-        background: var(--amber);
-      }
-      .term-bar .t-green {
-        background: var(--green);
-      }
-      .term-bar .t-title {
-        flex: 1;
-        text-align: center;
-        font-family: var(--font-mono);
-        font-size: 11px;
-        color: var(--fg-dim);
-        letter-spacing: 0.06em;
-        margin-right: 30px;
-      }
-      .term-body {
-        padding: 20px 22px;
-        font-family: var(--font-mono);
-        font-size: 13px;
-        line-height: 1.7;
-        overflow-x: auto;
-      }
-      .term-body .line {
-        white-space: pre;
-        color: var(--fg-dim);
-      }
-      .term-body .line.prompt {
-        color: var(--green);
-      }
-      .term-body .line.prompt::before {
-        content: "$ ";
-        color: var(--cyan);
-      }
-      .term-body .line.output {
-        color: var(--fg);
-        padding-left: 0;
-      }
-      .term-body .line .dim {
-        color: var(--fg-dim);
-      }
-      .term-body .cursor-line {
-        color: var(--green);
-      }
-      .term-body .cursor-line::after {
-        content: "▊";
-        display: inline-block;
-        animation: blink 1s step-end infinite;
       }
 
       /* ── Buttons ── */
@@ -306,7 +146,7 @@
         align-items: center;
         gap: 8px;
         padding: 12px 28px;
-        border-radius: 6px;
+        border-radius: var(--radius);
         font-family: var(--font-mono);
         font-size: 14px;
         font-weight: 600;
@@ -331,77 +171,358 @@
       }
       .btn-ghost:hover {
         background: var(--bg-elevated);
-        border-color: #333;
+        border-color: var(--border-hover);
+      }
+
+      /* ── Hero ── */
+      .hero {
+        padding: 140px 0 100px;
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+      }
+      .hero .grid-bg {
+        opacity: 0.05;
+        background-size: 80px 80px;
+      }
+      .hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--green-subtle);
+        border: 1px solid rgba(0, 229, 65, 0.15);
+        border-radius: 100px;
+        padding: 6px 18px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--green);
+        margin-bottom: 36px;
+      }
+      .hero-badge .dot {
+        width: 6px;
+        height: 6px;
+        background: var(--green);
+        border-radius: 50%;
+        animation: pulse-dot 2s infinite;
+      }
+      @keyframes pulse-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+      }
+      .hero h1 {
+        font-size: clamp(36px, 6.5vw, 68px);
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        color: #fff;
+        line-height: 1.1;
+        margin-bottom: 20px;
+      }
+      .hero h1 .accent {
+        background: linear-gradient(135deg, var(--green), var(--cyan));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+      .hero .tagline {
+        font-family: var(--font-mono);
+        font-size: clamp(14px, 1.8vw, 17px);
+        color: var(--fg-dim);
+        max-width: 640px;
+        margin: 0 auto 40px;
+        line-height: 1.7;
+      }
+      .hero .tagline .cursor {
+        display: inline-block;
+        width: 8px;
+        height: 1.2em;
+        background: var(--green);
+        vertical-align: text-bottom;
+        margin-left: 2px;
+        animation: blink 1s step-end infinite;
+      }
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
       }
       .hero-actions {
         display: flex;
         gap: 12px;
         justify-content: center;
         flex-wrap: wrap;
-        margin-bottom: 60px;
+        margin-bottom: 64px;
       }
 
-      /* ── Features ── */
-      .features {
-        background: var(--bg-card);
+      /* ── Terminal ── */
+      .term-wrap {
+        max-width: 720px;
+        margin: 0 auto;
         position: relative;
+        z-index: 1;
       }
+      .term {
+        background: #060606;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        text-align: left;
+        box-shadow:
+          0 20px 60px rgba(0, 0, 0, 0.6),
+          0 0 0 1px rgba(255, 255, 255, 0.02) inset,
+          0 0 100px rgba(0, 229, 65, 0.02);
+      }
+      .term-bar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 14px 18px;
+        background: rgba(255, 255, 255, 0.02);
+        border-bottom: 1px solid var(--border);
+      }
+      .term-bar span {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+      }
+      .term-bar .t-red { background: var(--red); }
+      .term-bar .t-amber { background: var(--amber); }
+      .term-bar .t-green { background: var(--green); }
+      .term-bar .t-title {
+        flex: 1;
+        text-align: center;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-muted);
+        letter-spacing: 0.06em;
+        margin-right: 30px;
+      }
+      .term-body {
+        padding: 20px 22px;
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        line-height: 1.7;
+        overflow-x: auto;
+      }
+      .term-body .l {
+        white-space: pre;
+        min-height: 1em;
+      }
+      .term-body .l .prompt { color: var(--green); }
+      .term-body .l .dim { color: var(--fg-dim); }
+      .term-body .l .muted { color: var(--fg-muted); }
+      .term-body .l .cyan { color: var(--cyan); }
+      .term-body .l .amber { color: var(--amber); }
+      .term-body .l .red { color: var(--red); }
+      .term-body .l .green { color: var(--green); }
+      .term-body .l .white { color: #e0e0e0; }
+      .cursor-line::after {
+        content: "▊";
+        display: inline-block;
+        animation: blink 1s step-end infinite;
+        color: var(--green);
+      }
+
+      /* ── Pain Points (对比) ── */
+      .pain-section {
+        background: var(--bg-card);
+      }
+      .pain-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        position: relative;
+        z-index: 1;
+      }
+      .pain-table th {
+        text-align: left;
+        padding: 16px 18px;
+        font-weight: 600;
+        color: #fff;
+        border-bottom: 1px solid var(--border);
+        font-size: 12px;
+        letter-spacing: 0.05em;
+      }
+      .pain-table th:first-child {
+        width: 36%;
+        color: var(--fg-dim);
+      }
+      .pain-table th:nth-child(2) {
+        color: var(--fg-dim);
+      }
+      .pain-table th:last-child {
+        color: var(--green);
+      }
+      .pain-table td {
+        padding: 16px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        line-height: 1.5;
+      }
+      .pain-table tr:last-child td {
+        border-bottom: none;
+      }
+      .pain-table .vs-old {
+        color: var(--fg-dim);
+      }
+      .pain-table .vs-new {
+        color: #e0e0e0;
+      }
+      .pain-table .vs-badge {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 4px;
+        letter-spacing: 0.05em;
+        margin-right: 6px;
+      }
+      .vs-badge-old {
+        background: rgba(255, 68, 68, 0.1);
+        color: var(--red);
+      }
+      .vs-badge-new {
+        background: var(--green-subtle);
+        color: var(--green);
+      }
+
+      /* ── Features Grid ── */
       .features-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 24px;
+        gap: 20px;
         position: relative;
         z-index: 1;
       }
       .feat-card {
-        background: var(--bg);
+        background: var(--bg-card);
         border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 32px;
-        transition:
-          border-color 0.3s,
-          transform 0.3s;
+        border-radius: var(--radius);
+        padding: 32px 28px;
+        transition: border-color 0.3s, transform 0.3s, box-shadow 0.3s;
         position: relative;
         overflow: hidden;
       }
       .feat-card:hover {
-        border-color: #333;
-        transform: translateY(-2px);
+        border-color: var(--border-hover);
+        transform: translateY(-3px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
       }
-      .feat-card::before {
+      .feat-card::after {
         content: "";
         position: absolute;
         top: 0;
         left: 0;
-        width: 100%;
+        right: 0;
         height: 1px;
-        background: linear-gradient(
-          90deg,
-          transparent,
-          var(--green),
-          transparent
-        );
+        background: linear-gradient(90deg, transparent, rgba(0, 229, 65, 0.3), transparent);
         opacity: 0;
         transition: opacity 0.3s;
       }
-      .feat-card:hover::before {
+      .feat-card:hover::after {
         opacity: 1;
       }
       .feat-icon {
-        font-size: 28px;
-        margin-bottom: 16px;
-        display: block;
-        width: 48px;
-        height: 48px;
+        width: 44px;
+        height: 44px;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(0, 229, 65, 0.06);
-        border-radius: 8px;
+        background: var(--green-subtle);
+        border-radius: var(--radius);
+        font-size: 22px;
+        margin-bottom: 18px;
+      }
+      .feat-card h3 {
+        font-size: 16px;
+        font-weight: 700;
+        color: #fff;
+        margin-bottom: 10px;
       }
       .feat-card p {
         font-size: 14px;
-        line-height: 1.65;
+        line-height: 1.7;
+        color: var(--fg-dim);
+      }
+
+      /* ── Tools Grid ── */
+      .tools-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 12px;
+        position: relative;
+        z-index: 1;
+      }
+      .tool-chip {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        padding: 10px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-card);
+        color: var(--fg-dim);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: border-color 0.2s, color 0.2s, background 0.2s;
+      }
+      .tool-chip:hover {
+        border-color: var(--green);
+        color: #e0e0e0;
+        background: var(--green-subtle);
+      }
+      .tool-chip .chip-icon {
+        font-size: 15px;
+        width: 20px;
+        text-align: center;
+      }
+      .tool-chip .chip-modes {
+        margin-left: auto;
+        font-size: 9px;
+        color: var(--fg-muted);
+        letter-spacing: 0.05em;
+      }
+
+      /* ── Architecture Flow ── */
+      .arch-flow {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        position: relative;
+        z-index: 1;
+        font-family: var(--font-mono);
+        font-size: 12px;
+      }
+      .arch-node {
+        padding: 14px 22px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg);
+        text-align: center;
+        white-space: nowrap;
+        transition: border-color 0.3s;
+      }
+      .arch-node:hover {
+        border-color: var(--green);
+      }
+      .arch-node .n-title {
+        color: #fff;
+        font-weight: 600;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      .arch-node .n-sub {
+        color: var(--fg-dim);
+        font-size: 11px;
+      }
+      .arch-arrow {
+        color: var(--green);
+        font-size: 16px;
+        font-weight: 600;
       }
 
       /* ── Install ── */
@@ -428,14 +549,14 @@
       .install-tab.active {
         background: var(--bg-elevated);
         color: var(--green);
-        border-color: #333 #333 var(--bg-elevated);
+        border-color: var(--border-hover) var(--border-hover) var(--bg-elevated);
       }
       .install-tab:hover:not(.active) {
         color: var(--fg);
       }
       .code-block {
         background: var(--bg-elevated);
-        border: 1px solid #333;
+        border: 1px solid var(--border-hover);
         border-radius: 0 8px 8px 8px;
         padding: 24px;
         font-family: var(--font-mono);
@@ -449,18 +570,10 @@
       .code-block.active {
         display: block;
       }
-      .code-block .c1 {
-        color: var(--green);
-      }
-      .code-block .c2 {
-        color: var(--cyan);
-      }
-      .code-block .c3 {
-        color: var(--amber);
-      }
-      .code-block .comment {
-        color: var(--fg-dim);
-      }
+      .code-block .c1 { color: var(--green); }
+      .code-block .c2 { color: var(--cyan); }
+      .code-block .c3 { color: var(--amber); }
+      .code-block .comment { color: var(--fg-muted); }
       .copy-btn {
         position: absolute;
         top: 12px;
@@ -480,54 +593,14 @@
         border-color: var(--green);
       }
 
-      /* ── Architecture ── */
-      .arch-flow {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-wrap: wrap;
-        gap: 12px;
-        position: relative;
-        z-index: 1;
-        font-family: var(--font-mono);
-        font-size: 12px;
-      }
-      .arch-node {
-        padding: 16px 24px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--bg);
-        text-align: center;
-        white-space: nowrap;
-        transition: border-color 0.3s;
-      }
-      .arch-node:hover {
-        border-color: var(--green);
-      }
-      .arch-node .n-title {
-        color: #fff;
-        font-weight: 600;
-        font-size: 13px;
-        margin-bottom: 4px;
-      }
-      .arch-node .n-sub {
-        color: var(--fg-dim);
-        font-size: 11px;
-      }
-      .arch-arrow {
-        color: var(--green);
-        font-size: 18px;
-        font-weight: 700;
-      }
-
       /* ── Footer ── */
       footer {
         border-top: 1px solid var(--border);
-        padding: 40px 0;
+        padding: 48px 0;
         text-align: center;
         font-family: var(--font-mono);
         font-size: 12px;
-        color: var(--fg-dim);
+        color: var(--fg-muted);
       }
       footer a {
         color: var(--fg-dim);
@@ -544,67 +617,50 @@
         flex-wrap: wrap;
         margin-bottom: 16px;
       }
+      footer .footer-credit {
+        font-size: 11px;
+        color: var(--fg-muted);
+      }
 
-      /* ── Reveal Animations ── */
+      /* ── Reveal ── */
       .reveal {
         opacity: 0;
         transform: translateY(30px);
-        transition:
-          opacity 0.6s ease,
-          transform 0.6s ease;
+        transition: opacity 0.6s ease, transform 0.6s ease;
       }
       .reveal.visible {
         opacity: 1;
         transform: translateY(0);
       }
-      .reveal-d1 {
-        transition-delay: 0.1s;
-      }
-      .reveal-d2 {
-        transition-delay: 0.2s;
-      }
-      .reveal-d3 {
-        transition-delay: 0.3s;
-      }
-      .reveal-d4 {
-        transition-delay: 0.4s;
-      }
-      .reveal-d5 {
-        transition-delay: 0.5s;
-      }
-      .reveal-d6 {
-        transition-delay: 0.6s;
-      }
+      .reveal-d1 { transition-delay: 0.08s; }
+      .reveal-d2 { transition-delay: 0.16s; }
+      .reveal-d3 { transition-delay: 0.24s; }
+      .reveal-d4 { transition-delay: 0.32s; }
+      .reveal-d5 { transition-delay: 0.40s; }
+      .reveal-d6 { transition-delay: 0.48s; }
+      .reveal-d7 { transition-delay: 0.56s; }
+      .reveal-d8 { transition-delay: 0.64s; }
 
       /* ── Responsive ── */
       @media (max-width: 768px) {
-        section {
-          padding: 60px 0;
-        }
-        .hero {
-          padding: 80px 0 60px;
-        }
-        .hero h1 {
-          font-size: 36px;
-        }
-        .term-body {
-          font-size: 11px;
-          padding: 16px;
-        }
-        .arch-flow {
-          flex-direction: column;
-          gap: 8px;
-        }
-        .arch-arrow {
-          transform: rotate(90deg);
-        }
-        .features-grid {
-          grid-template-columns: 1fr;
-        }
+        section { padding: 60px 0; }
+        .hero { padding: 100px 0 60px; min-height: auto; }
+        .hero h1 { font-size: 32px; }
+        .term-body { font-size: 11px; padding: 16px; }
+        .arch-flow { flex-direction: column; gap: 6px; }
+        .arch-arrow { transform: rotate(90deg); }
+        .features-grid { grid-template-columns: 1fr; }
+        .pain-table th, .pain-table td { padding: 12px 14px; font-size: 12px; }
+        .pain-table th:first-child { width: auto; }
+        .pain-table { font-size: 11px; }
+        .tools-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
       }
 
-      /* ── Green glow utility ── */
-      .glow {
+      /* ── Section alt bg ── */
+      .bg-alt { background: var(--bg-card); }
+
+      /* ── Glow ── */
+      .glow-green {
         text-shadow: 0 0 20px rgba(0, 229, 65, 0.3);
       }
     </style>
@@ -612,204 +668,225 @@
   <body>
     <div class="scanlines"></div>
 
-    <!-- ═══════════ HERO ═══════════ -->
+    <!-- ═══════════════════ HERO ═══════════════════ -->
     <section class="hero">
       <div class="grid-bg"></div>
       <div class="container">
         <div class="hero-badge reveal">
-          <span class="dot"></span> v1.0 · 开源免费
+          <span class="dot"></span> Go 实现 · 单二进制 · 开源
         </div>
         <h1 class="reveal reveal-d1">
-          <span class="accent glow">DeepX</span> —<br />AI 代码助手<br />跑在你的终端里
+          <span class="accent glow-green">DeepX</span><br />
+          本地优先的 AI 编码 agent
         </h1>
         <p class="tagline reveal reveal-d2">
-          Go 写的 TUI，跑在任何 OpenAI 兼容的 LLM 上，默认对接 DeepSeek。<br />
-          单二进制 · 纯键盘 · 聚焦中文用户 · 强调 token 经济<span
-            class="cursor"
-          ></span>
+          gob 二进制持久化，重启就是无缝续接&nbsp;&nbsp;·&nbsp;&nbsp;零延迟关键词路由<br />
+          DeepSeek 硬盘缓存原生友好&nbsp;&nbsp;·&nbsp;&nbsp;本地 OCR 补齐视觉短板<span class="cursor"></span>
         </p>
         <div class="hero-actions reveal reveal-d3">
           <a href="#install" class="btn btn-primary">快速安装</a>
-          <a
-            href="https://github.com/itmisx/deepx"
-            class="btn btn-ghost"
-            target="_blank"
-            >GitHub →</a
-          >
+          <a href="https://github.com/itmisx/deepx" class="btn btn-ghost" target="_blank">GitHub →</a>
+          <a href="#compare" class="btn btn-ghost">为什么选 DeepX</a>
         </div>
 
         <!-- Terminal Mockup -->
         <div class="term-wrap reveal reveal-d4">
           <div class="term">
             <div class="term-bar">
-              <span class="t-red"></span><span class="t-amber"></span
-              ><span class="t-green"></span>
-              <span class="t-title">Terminal — deepx</span>
+              <span class="t-red"></span><span class="t-amber"></span><span class="t-green"></span>
+              <span class="t-title">deepx — ~/my-project</span>
             </div>
             <div class="term-body">
-              <div class="line prompt">
-                <span class="dim">cd ~/my-project</span>
-              </div>
-              <div class="line prompt">deepx</div>
-              <div class="line output">
-                <span class="dim"
-                  >deepx dev (commit abc1234, built 2026-01-15)</span
-                >
-              </div>
-              <div class="line output">当前模式: review, 模型: flash</div>
-              <div class="line output">&nbsp;</div>
-              <div class="line output">
-                <span class="dim"># 输入你的需求，deepx 开始工作</span>
-              </div>
-              <div class="line cursor-line">你好，有什么可以帮你的？</div>
+              <div class="l"><span class="prompt">$</span> <span class="dim">cd ~/my-project</span></div>
+              <div class="l"><span class="prompt">$</span> deepx</div>
+              <div class="l"><span class="dim">deepx dev (commit abc1234)</span></div>
+              <div class="l">当前模式: <span class="cyan">review</span>, 模型: <span class="amber">flash</span></div>
+              <div class="l">&nbsp;</div>
+              <div class="l"><span class="muted"># 重启后扫码：完整上下文恢复</span></div>
+              <div class="l"><span class="muted"># (tool_calls / tool results / reasoning 全部保留)</span></div>
+              <div class="l">&nbsp;</div>
+              <div class="l"><span class="green">📄 Read</span> <span class="dim">(src/main.go)</span></div>
+              <div class="l"><span class="green">🔍 Grep</span> <span class="dim">(pattern in src/)</span></div>
+              <div class="l"><span class="dim">  📄 ✓ Read</span></div>
+              <div class="l"><span class="dim">  🔍 ✓ Grep</span></div>
+              <div class="l">&nbsp;</div>
+              <div class="l"><span class="white">**🐋 deepx**: 分析完成，关键发现是……</span></div>
+              <div class="l">&nbsp;</div>
+              <div class="l cursor-line"><span class="prompt">$</span></div>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ═══════════ FEATURES ═══════════ -->
-    <section class="features">
+    <!-- ═══════════════════ PAIN POINTS ═══════════════════ -->
+    <section class="bg-alt" id="compare">
       <div class="grid-bg"></div>
       <div class="container">
-        <span class="section-label reveal">为什么选择 DeepX</span>
-        <h2 class="reveal reveal-d1">六大核心能力</h2>
+        <span class="section-label reveal">对比</span>
+        <h2 class="reveal reveal-d1">主流 agent 的痛点，DeepX 的解法</h2>
+        <p class="section-sub reveal reveal-d2">
+          传统方案在上下文恢复、缓存利用、路由延迟上各有妥协。DeepX 从底层重新设计。
+        </p>
+        <table class="pain-table reveal reveal-d3">
+          <thead>
+            <tr>
+              <th>痛点</th>
+              <th>主流 agent</th>
+              <th>DeepX</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>重启上下文恢复</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">仅纯文本</span>JSONL 只存 user/assistant content，tool_calls、tool results、reasoning_content 全部丢失</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">完整 fidelity</span>gob 二进制持久化，LLM 无缝续接，重启后跟没断过一样</td>
+            </tr>
+            <tr>
+              <td>模型路由延迟 &amp; 成本</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">LLM 分类</span>每次用户输入先调一次 LLM 决定路由，额外消耗 token + 延迟</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">零延迟</span>纯本地关键词匹配 + 长度判定，5 语言覆盖，路由零 token 消耗</td>
+            </tr>
+            <tr>
+              <td>DeepSeek 硬盘缓存</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">频繁 miss</span>tools 数组随模式切换而变，system prompt 版本不一致导致前缀漂移</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">前缀稳定</span>tools 全模式恒定；system prompt 版本感知，gob 恢复时自动替换为当前版本</td>
+            </tr>
+            <tr>
+              <td>复杂任务调度</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">串行等待</span>多步任务步步等待，无法利用并发加速</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">DAG 并发</span>LLM 拆 DAG → deepx 按依赖并行跑子 agent，节点独立选模型</td>
+            </tr>
+            <tr>
+              <td>图片输入（DeepSeek 用户）</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">不支持</span>DeepSeek 无多模态，发图=发不了</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">本地 OCR</span>Ctrl+V 粘贴 → PaddleOCR 离线识别，补齐最大短板</td>
+            </tr>
+            <tr>
+              <td>写操作防护</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">要么全自动，要么全禁</span>无细粒度审核粒度</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">三模式分级</span>review（默认：写/Shell 确认）/ auto（全自动）/ plan（只读）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ═══════════════════ FEATURES ═══════════════════ -->
+    <section>
+      <div class="container">
+        <span class="section-label reveal">核心能力</span>
+        <h2 class="reveal reveal-d1">六大设计亮点</h2>
+        <p class="section-sub reveal reveal-d2">
+          每个特性都在解决一个实际问题，不是堆功能。
+        </p>
         <div class="features-grid">
           <div class="feat-card reveal reveal-d1">
-            <div class="feat-icon">⚡</div>
-            <h3>双模型智能路由</h3>
+            <div class="feat-icon">💾</div>
+            <h3>gob 二进制持久化</h3>
             <p>
-              flash 起手处理机械单步，关键词命中或任务超阈值时自动升
-              pro。本地路由，零 LLM 调用延迟，最大化 token 经济。
+              完整保存 tool_calls、tool results、reasoning_content。重启后 LLM
+              无缝续接，零计算恢复。同时保留 JSONL 供 Memory 搜索。system prompt
+              版本感知，build 升级 / skill 变化时自动替换。
             </p>
           </div>
-
           <div class="feat-card reveal reveal-d2">
-            <div class="feat-icon">🔀</div>
-            <h3>Plan DAG 并行调度</h3>
+            <div class="feat-icon">⚡</div>
+            <h3>双模型零延迟路由</h3>
             <p>
-              LLM 主动拆解复杂任务为 DAG，deepx 按依赖关系并发执行多个子
-              agent，每个节点独立选择 flash 或 pro 模型。
+              flash 接机械单步、pro 处理复杂任务。关键词 + 长度判定，纯本地执行，
+              覆盖中/英/日/韩。路由不花一分 token，起手就是正确答案。
             </p>
           </div>
-
           <div class="feat-card reveal reveal-d3">
-            <div class="feat-icon">🛡️</div>
-            <h3>审核模式，安全可控</h3>
+            <div class="feat-icon">🔀</div>
+            <h3>Plan DAG 并发调度</h3>
             <p>
-              默认 review 模式：Write / Update / Bash 需人工确认。一键 /auto
-              切换全自动，/plan 切只读。你的代码你做主。
+              LLM 通过 CreatePlan 工具拆解 DAG，deepx 按依赖并发调度子 agent。
+              每个节点独立选 flash / pro，结果汇总回主对话。多步任务不再串行等待。
             </p>
           </div>
-
           <div class="feat-card reveal reveal-d4">
-            <div class="feat-icon">📷</div>
-            <h3>本地 OCR，补齐视觉</h3>
+            <div class="feat-icon">🛡️</div>
+            <h3>三级模式管理</h3>
             <p>
-              Ctrl+V 粘贴图片自动调 PaddleOCR 识别文字，补齐 DeepSeek
-              不支持图片的最大短板。首次下载约 37MB 模型。
+              review（默认）：Write / Update / Bash 人工确认，其余自动。auto：
+              全自动。plan：只读。细粒度可控，不因安全牺牲效率。
             </p>
           </div>
-
           <div class="feat-card reveal reveal-d5">
-            <div class="feat-icon">💬</div>
-            <h3>会话压缩与持久化</h3>
+            <div class="feat-icon">📷</div>
+            <h3>本地离线上 OCR</h3>
             <p>
-              长对话自动分层压缩保留关键决策；按 workspace
-              路径分库，对话按天落盘，重启自动续上，DeepSeek KV cache 友好。
+              Ctrl+V 粘贴图片 → 自动落盘 → OCR 工具（PaddleOCR PP-OCRv5）识别。
+              补齐 DeepSeek 不支持图片的最大短板。首次下载 ~37MB 模型，后续秒级。
             </p>
           </div>
-
           <div class="feat-card reveal reveal-d6">
-            <div class="feat-icon">🔧</div>
-            <h3>Skills + Memory 按需加载</h3>
+            <div class="feat-icon">🧠</div>
+            <h3>会话压缩 &amp; KV cache 友好</h3>
             <p>
-              跨 workspace/global 多路径发现 Skills，兼容 Claude Code
-              生态。Memory 工具按关键词检索历史，不预注入，不占 token。
+              超窗口 70% 自动触发，尾部保留 ~20K token，旧内容 LLM 压缩为连贯摘要。
+              旧摘要合并而非丢弃。tools 数组全模式恒定，system prompt 版本感知，
+              DeepSeek 硬盘缓存命中率最大化。
             </p>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ═══════════ INSTALL ═══════════ -->
-    <section id="install">
-      <div class="container">
-        <span class="section-label reveal">开始使用</span>
-        <h2 class="reveal reveal-d1">一行命令，即刻安装</h2>
-
-        <div class="install-tabs reveal reveal-d2">
-          <button class="install-tab active" data-tab="tab-mac">
-            macOS / Linux
-          </button>
-          <button class="install-tab" data-tab="tab-win">Windows</button>
-          <button class="install-tab" data-tab="tab-src">从源码构建</button>
-        </div>
-
-        <div class="code-block active reveal reveal-d3" id="tab-mac">
-          <button
-            class="copy-btn"
-            data-copy="curl -fsSL https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.sh | bash"
-          >
-            复制
-          </button>
-          <span class="c1">curl</span> <span class="c2">-fsSL</span>
-          <span class="c3"
-            >https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.sh</span
-          >
-          | <span class="c1">bash</span>
-        </div>
-
-        <div class="code-block reveal reveal-d3" id="tab-win">
-          <button
-            class="copy-btn"
-            data-copy="irm https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.ps1 | iex"
-          >
-            复制
-          </button>
-          <span class="c1">irm</span>
-          <span class="c3"
-            >https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.ps1</span
-          >
-          | <span class="c1">iex</span>
-        </div>
-
-        <div class="code-block reveal reveal-d3" id="tab-src">
-          <button
-            class="copy-btn"
-            data-copy="git clone https://github.com/itmisx/deepx.git && cd deepx && go build ."
-          >
-            复制
-          </button>
-          <span class="c1">git</span> clone
-          <span class="c3">https://github.com/itmisx/deepx.git</span><br />
-          <span class="c1">cd</span> deepx<br />
-          <span class="c1">go</span> build .
-          <span class="comment"># 需要 Go 1.25+，Windows 产物为 deepx.exe</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══════════ ARCHITECTURE ═══════════ -->
-    <section style="background: var(--bg-card)">
+    <!-- ═══════════════════ TOOLS ═══════════════════ -->
+    <section class="bg-alt">
       <div class="grid-bg"></div>
       <div class="container">
-        <span class="section-label reveal">架构一览</span>
-        <h2 class="reveal reveal-d1">单轮对话流程</h2>
-        <div class="arch-flow reveal reveal-d2">
+        <span class="section-label reveal">工具箱</span>
+        <h2 class="reveal reveal-d1">15 个原生工具，随需调用</h2>
+        <p class="section-sub reveal reveal-d2">
+          LLM 自主按需调用，不预注入不占 token。三分级模式控制写操作。
+        </p>
+        <div class="tools-grid">
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">📄</span> Read</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">📝</span> Write</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">📝</span> Update</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">📂</span> List</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">🌲</span> Tree</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🔎</span> Glob</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">🔍</span> Grep</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🐚</span> Bash</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">🌐</span> Search</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">📡</span> Fetch</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">👀</span> OCR</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🧠</span> Memory</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">📜</span> LoadSkill</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🚀</span> SwitchModel</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">📋</span> CreatePlan</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════ ARCHITECTURE ═══════════════════ -->
+    <section>
+      <div class="grid-bg"></div>
+      <div class="container">
+        <span class="section-label reveal">架构</span>
+        <h2 class="reveal reveal-d1">单轮对话与持久化流程</h2>
+        <p class="section-sub reveal reveal-d2">
+          从用户输入到工具执行，每一步都围绕 token 经济和缓存优化设计。
+        </p>
+        <div class="arch-flow reveal reveal-d3" style="margin-bottom: 40px;">
           <div class="arch-node">
             <div class="n-title">用户输入</div>
             <div class="n-sub">自然语言 / 图片粘贴</div>
           </div>
           <span class="arch-arrow">→</span>
-          <div class="arch-node">
+          <div class="arch-node" style="border-color: rgba(0, 229, 65, 0.3);">
             <div class="n-title">Keyword Router</div>
             <div class="n-sub">本地零延迟 → flash / pro</div>
           </div>
           <span class="arch-arrow">→</span>
           <div class="arch-node">
-            <div class="n-title">LLM 推理循环</div>
-            <div class="n-sub">直接回答 / 调工具 / CreatePlan</div>
+            <div class="n-title">LLM 工具循环</div>
+            <div class="n-sub">直接答 / 调工具 / CreatePlan</div>
           </div>
           <span class="arch-arrow">→</span>
           <div class="arch-node">
@@ -822,26 +899,74 @@
             <div class="n-sub">并发调度 · 结果回灌</div>
           </div>
         </div>
+        <div class="arch-flow reveal reveal-d4" style="gap: 8px;">
+          <div class="arch-node">
+            <div class="n-title">HistoryUpdate</div>
+            <div class="n-sub">SaveGob (完整 fidelity)</div>
+          </div>
+          <span class="arch-arrow">→</span>
+          <div class="arch-node">
+            <div class="n-title">history.gob</div>
+            <div class="n-sub">重启恢复 · 零计算</div>
+          </div>
+          <span class="arch-arrow" style="color: var(--fg-muted);">│</span>
+          <div class="arch-node" style="border-color: var(--fg-muted);">
+            <div class="n-title">StreamDone</div>
+            <div class="n-sub">Append JSONL (Memory 搜索)</div>
+          </div>
+          <span class="arch-arrow" style="color: var(--fg-muted);">→</span>
+          <div class="arch-node" style="border-color: var(--fg-muted);">
+            <div class="n-title">YYYY-MM-DD.jsonl</div>
+            <div class="n-sub">纯文本日志</div>
+          </div>
+        </div>
       </div>
     </section>
 
-    <!-- ═══════════ FOOTER ═══════════ -->
+    <!-- ═══════════════════ INSTALL ═══════════════════ -->
+    <section class="bg-alt" id="install">
+      <div class="container">
+        <span class="section-label reveal">开始使用</span>
+        <h2 class="reveal reveal-d1">一行命令，即刻安装</h2>
+        <p class="section-sub reveal reveal-d2">
+          首次启动弹窗引导填 API key，自动写入 <span class="mono">~/.deepx/model.yaml</span>。
+        </p>
+        <div class="install-tabs reveal reveal-d3">
+          <button class="install-tab active" data-tab="tab-mac">macOS / Linux</button>
+          <button class="install-tab" data-tab="tab-win">Windows</button>
+          <button class="install-tab" data-tab="tab-src">从源码构建</button>
+        </div>
+        <div class="code-block active reveal reveal-d4" id="tab-mac">
+          <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.sh | bash">复制</button>
+          <span class="c1">curl</span> <span class="c2">-fsSL</span>
+          <span class="c3">https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.sh</span>
+          | <span class="c1">bash</span>
+        </div>
+        <div class="code-block reveal reveal-d4" id="tab-win">
+          <button class="copy-btn" data-copy="irm https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.ps1 | iex">复制</button>
+          <span class="c1">irm</span>
+          <span class="c3">https://raw.githubusercontent.com/itmisx/deepx/main/scripts/install.ps1</span>
+          | <span class="c1">iex</span>
+        </div>
+        <div class="code-block reveal reveal-d4" id="tab-src">
+          <button class="copy-btn" data-copy="git clone https://github.com/itmisx/deepx.git && cd deepx && go build .">复制</button>
+          <span class="c1">git</span> clone <span class="c3">https://github.com/itmisx/deepx.git</span><br />
+          <span class="c1">cd</span> deepx<br />
+          <span class="c1">go</span> build . <span class="comment"># 需要 Go 1.25+</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════ FOOTER ═══════════════════ -->
     <footer>
       <div class="container">
         <div class="footer-links">
           <a href="https://github.com/itmisx/deepx" target="_blank">GitHub</a>
-          <a
-            href="https://github.com/itmisx/deepx/blob/main/LICENSE"
-            target="_blank"
-            >MIT License</a
-          >
-          <a href="https://github.com/itmisx/deepx/releases" target="_blank"
-            >Releases</a
-          >
+          <a href="https://github.com/itmisx/deepx/blob/main/LICENSE" target="_blank">MIT License</a>
+          <a href="https://github.com/itmisx/deepx/releases" target="_blank">Releases</a>
         </div>
-        <p style="font-size: 11px; color: var(--fg-dim)">
-          Made with Go · Powered by DeepSeek · OCR by PaddleOCR · TUI by
-          Charm<br />
+        <p class="footer-credit">
+          Made with Go · Powered by DeepSeek · OCR by PaddleOCR · TUI by Charm<br />
           &copy; 2026 itmisx
         </p>
       </div>
@@ -851,12 +976,8 @@
       // ── Tab switching ──
       document.querySelectorAll(".install-tab").forEach((tab) => {
         tab.addEventListener("click", () => {
-          document
-            .querySelectorAll(".install-tab")
-            .forEach((t) => t.classList.remove("active"));
-          document
-            .querySelectorAll(".code-block")
-            .forEach((b) => b.classList.remove("active"));
+          document.querySelectorAll(".install-tab").forEach((t) => t.classList.remove("active"));
+          document.querySelectorAll(".code-block").forEach((b) => b.classList.remove("active"));
           tab.classList.add("active");
           document.getElementById(tab.dataset.tab).classList.add("active");
         });
@@ -891,12 +1012,8 @@
         },
         { threshold: 0.15, rootMargin: "0px 0px -40px 0px" },
       );
-
-      document
-        .querySelectorAll(".reveal")
-        .forEach((el) => observer.observe(el));
-
-      // Trigger initial visible elements immediately
+      document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+      // Trigger initial visible elements
       setTimeout(() => {
         document.querySelectorAll(".reveal").forEach((el) => {
           const rect = el.getBoundingClientRect();

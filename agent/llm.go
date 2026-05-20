@@ -217,35 +217,10 @@ func CallOnce(apiKey, baseURL, modelID string, convo []ChatMessage, maxTokens in
 // StartStream 启动一个对话回合。入口由 RouteByKeyword 决定起手模型(flash/pro),
 // 本轮锁定该模型不再切换。复杂任务由模型主动调 CreatePlan 拆分,plan 节点的 model 字段
 // 由 sub-agent 按需路由,实现细粒度的模型选择。
-func StartStream(
-	models ModelConfig,
-	history []ChatMessage,
-	maxTokens int,
-	mode AgentMode,
-	workspace string,
-	skillCatalog string, // 见下方 system prompt 注入逻辑;空串表示当前没有 skill
-) (tea.Cmd, <-chan tea.Msg) {
-	ch := make(chan tea.Msg, 128)
-
-	go func() {
-		defer close(ch)
-
-		convo := append([]ChatMessage(nil), history...)
-		// 从 history 里找最后一条 user 消息,作为派给子 agent 的"任务背景"
-		latestUserTask := ""
-		for i := len(history) - 1; i >= 0; i-- {
-			if history[i].Role == "user" {
-				latestUserTask = history[i].Content
-				break
-			}
-		}
-		if workspace != "" {
-			// 在首轮注入 system 提示:当前工作目录 + 任务拆解 + plan 节点的 model 选择指南。
-			// 入口模型已经由 keyword router 决定(flash 或 pro);模型自行判断要不要 CreatePlan 拆任务。
-			if len(convo) == 0 || convo[0].Role != "system" {
-				// system prompt 只放跨工具的行为规约 — 触发条件 / 调用语法 / 拆分模式等
-				// 每个工具自己的 description 已经覆盖,这里不重复,避免每轮浪费 token。
-				sysBase := fmt.Sprintf(`你是 DeepX,一个自主编码 agent,跑在用户的本地开发环境里。
+// BuildSystemPrompt 构建当前版本的 system prompt,供 StartStream 和 gob 恢复时共用。
+// workspace 和 skillCatalog 由调用方传入,确保版本一致性。
+func BuildSystemPrompt(workspace, skillCatalog string) string {
+	base := fmt.Sprintf(`你是 DeepX,一个自主编码 agent,跑在用户的本地开发环境里。
 
 通过工具帮用户:理解代码 · 编辑文件 · 写代码 · 调试 · 执行 shell 命令 · 拆任务 · 推理架构。
 
@@ -286,13 +261,41 @@ func StartStream(
 
 # 运行时
 - 当前工作目录:%s`,
-					workspace,
-				)
-				// Skill 索引:tui 启动时扫 ~/.deepx/skills/ + session/skills/ 拼出来,
-				// 这里只展示给 LLM "有哪些"和"是干啥的",正文按需通过 LoadSkill 工具拿。
-				if skillCatalog != "" {
-					sysBase += "\n\n**Available Skills**(用户预定义的指令包,description 跟当前任务对得上就调 `LoadSkill` 加载正文)\n" + skillCatalog
-				}
+		workspace,
+	)
+	if skillCatalog != "" {
+		base += "\n\n**Available Skills**(用户预定义的指令包,description 跟当前任务对得上就调 `LoadSkill` 加载正文)\n" + skillCatalog
+	}
+	return base
+}
+
+func StartStream(
+	models ModelConfig,
+	history []ChatMessage,
+	maxTokens int,
+	mode AgentMode,
+	workspace string,
+	skillCatalog string, // 见下方 system prompt 注入逻辑;空串表示当前没有 skill
+) (tea.Cmd, <-chan tea.Msg) {
+	ch := make(chan tea.Msg, 128)
+
+	go func() {
+		defer close(ch)
+
+		convo := append([]ChatMessage(nil), history...)
+		// 从 history 里找最后一条 user 消息,作为派给子 agent 的"任务背景"
+		latestUserTask := ""
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].Role == "user" {
+				latestUserTask = history[i].Content
+				break
+			}
+		}
+		if workspace != "" {
+			// 在首轮注入 system 提示:当前工作目录 + 任务拆解 + plan 节点的 model 选择指南。
+			// 入口模型已经由 keyword router 决定(flash 或 pro);模型自行判断要不要 CreatePlan 拆任务。
+			if len(convo) == 0 || convo[0].Role != "system" {
+				sysBase := BuildSystemPrompt(workspace, skillCatalog)
 				convo = append([]ChatMessage{{Role: "system", Content: sysBase}}, convo...)
 			}
 		}

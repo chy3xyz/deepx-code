@@ -13,15 +13,20 @@ package session
 import (
 	"bufio"
 	"crypto/sha1"
+	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 )
+
+// gobMagic 是二进制 history 文件的魔数头(4 字节),用于版本校验。
+const gobMagic = "DXP1"
 
 // Entry 是 jsonl 里每行的结构。简洁版只 ts/role/content。
 type Entry struct {
@@ -129,6 +134,55 @@ func (m *Manager) LoadSummary() (summary string, totalTurns int) {
 		return "", 0
 	}
 	return s.Summary, s.TotalTurns
+}
+
+// SaveGob 以 gob 格式将 v 编码到 filename,写入 session 目录。原子写(write-then-rename)。
+// 文件头带 4 字节魔数 DXP1,用于版本校验。
+func (m *Manager) SaveGob(filename string, v any) error {
+	path := filepath.Join(m.rootDir, filename)
+	tmpPath := path + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	closeOK := false
+	defer func() {
+		if !closeOK {
+			f.Close()
+			os.Remove(tmpPath)
+		}
+	}()
+	if _, err := f.Write([]byte(gobMagic)); err != nil {
+		return err
+	}
+	if err := gob.NewEncoder(f).Encode(v); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	closeOK = true
+	return os.Rename(tmpPath, path)
+}
+
+// LoadGob 从 session 目录的 filename 读 gob 编码,解码到 v。
+// 魔数不匹配或文件不存在均返回 error。
+func (m *Manager) LoadGob(filename string, v any) error {
+	path := filepath.Join(m.rootDir, filename)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(f, magic); err != nil {
+		return err
+	}
+	if string(magic) != gobMagic {
+		return fmt.Errorf("invalid history magic: %x", magic)
+	}
+	return gob.NewDecoder(f).Decode(v)
 }
 
 // todayPath 当天文件路径。按本地时区命名,方便人类浏览。

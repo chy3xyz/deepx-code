@@ -216,61 +216,86 @@ func initialModel(models agent.ModelConfig, needsSetup bool) model {
 		skillCatalog:    skillCatalog,
 	}
 
-	// 恢复会话历史。有摘要时跳过覆盖的 user 恢复,无摘要时按对加载。
+	// 恢复会话历史:优先尝试二进制 gob 文件(含 tool_calls/tool_results/reasoning),
+	// 失败时回退 JSONL 文本恢复(仅 user/assistant content)。
 	if sess != nil {
-		summary, totalTurns := sess.LoadSummary()
-		if summary != "" && totalTurns > 0 {
-			// totalTurns 是压缩后保留的轮数，直接用它加载。
-			entries := sess.LoadRecentTurns(totalTurns)
-
-			// 摘要作为第一条 assistant 消息
-			summaryMsg := "## 会话摘要\n" + summary
-			m.history = append(m.history, agent.ChatMessage{Role: "assistant", Content: summaryMsg})
-			m.chatContent.WriteString(rolePrefix("assistant") + summaryMsg + "\n\n---\n\n")
-
-			for _, e := range entries {
-				m.history = append(m.history, agent.ChatMessage{
-					Role:    e.Role,
-					Content: e.Content,
-				})
-				role := "deepx"
-				if e.Role == "user" {
-					role = "You"
-
-				}
-				m.chatContent.WriteString(rolePrefix(role) + e.Content + "\n\n")
+		var gobOK bool
+		var gobHistory []agent.ChatMessage
+		if err := sess.LoadGob("history.gob", &gobHistory); err == nil && len(gobHistory) > 0 {
+			gobOK = true
+			// 如果首条是旧 system prompt,替换为当前版本,确保
+			// system prompt 文本或 skill 目录变化后 LLM 仍看到最新内容。
+			if gobHistory[0].Role == "system" {
+				gobHistory[0].Content = agent.BuildSystemPrompt(m.workspace, m.skillCatalog)
 			}
-			if len(entries) > 0 {
-				m.chatContent.WriteString("---\n_(以上为历史对话,共 " +
-					strconv.Itoa(len(entries)) + " 条)_\n\n")
-			}
-		} else {
-			// 无压缩摘要:按对加载
-			const resumeTurns = 20
-			entries := sess.LoadRecentTurns(resumeTurns)
-			for _, e := range entries {
-				m.history = append(m.history, agent.ChatMessage{
-					Role:    e.Role,
-					Content: e.Content,
-				})
-				role := "deepx"
-				if e.Role == "user" {
-					role = "You"
-
-				}
-				m.chatContent.WriteString(rolePrefix(role) + e.Content + "\n\n")
-			}
-			if len(entries) > 0 {
-				m.chatContent.WriteString("---\n_(以上为历史对话,共 " +
-					strconv.Itoa(len(entries)) + " 条)_\n\n")
+			m.history = gobHistory
+			m.chatContent.WriteString(rebuildChatFromHistory(gobHistory))
+			m.chatContent.WriteString("---\n_(已恢复完整会话)_\n\n")
+			// 如果有会话压缩摘要,更新显示用 totalTurns
+			if len(gobHistory) > 0 && gobHistory[0].Role == "assistant" &&
+				strings.HasPrefix(gobHistory[0].Content, "## 会话摘要") {
+				// summary 已在内,不用额外处理
 			}
 		}
-		// 声明当前模式,通知 LLM 当前状态。模式始终从 review 起步。
-		msg := modeNotification(m.mode, m.activeModelRole)
-		m.history = append(m.history, agent.ChatMessage{Role: "assistant", Content: msg})
-		m.appendChat("assistant", msg)
-		if m.session != nil {
-			_ = m.session.Append("assistant", msg)
+
+		if !gobOK {
+			summary, totalTurns := sess.LoadSummary()
+			if summary != "" && totalTurns > 0 {
+				// totalTurns 是压缩后保留的轮数，直接用它加载。
+				entries := sess.LoadRecentTurns(totalTurns)
+
+				// 摘要作为第一条 assistant 消息
+				summaryMsg := "## 会话摘要\n" + summary
+				m.history = append(m.history, agent.ChatMessage{Role: "assistant", Content: summaryMsg})
+				m.chatContent.WriteString(rolePrefix("assistant") + summaryMsg + "\n\n---\n\n")
+
+				for _, e := range entries {
+					m.history = append(m.history, agent.ChatMessage{
+						Role:    e.Role,
+						Content: e.Content,
+					})
+					role := "deepx"
+					if e.Role == "user" {
+						role = "You"
+
+					}
+					m.chatContent.WriteString(rolePrefix(role) + e.Content + "\n\n")
+				}
+				if len(entries) > 0 {
+					m.chatContent.WriteString("---\n_(以上为历史对话,共 " +
+						strconv.Itoa(len(entries)) + " 条)_\n\n")
+				}
+			} else {
+				// 无压缩摘要:按对加载
+				const resumeTurns = 20
+				entries := sess.LoadRecentTurns(resumeTurns)
+				for _, e := range entries {
+					m.history = append(m.history, agent.ChatMessage{
+						Role:    e.Role,
+						Content: e.Content,
+					})
+					role := "deepx"
+					if e.Role == "user" {
+						role = "You"
+
+					}
+					m.chatContent.WriteString(rolePrefix(role) + e.Content + "\n\n")
+				}
+				if len(entries) > 0 {
+					m.chatContent.WriteString("---\n_(以上为历史对话,共 " +
+						strconv.Itoa(len(entries)) + " 条)_\n\n")
+				}
+			}
+
+			// 声明当前模式,通知 LLM 当前状态。模式始终从 review 起步。
+			// 注意:gob 恢复时跳过此步骤 — 历史已包含之前的 mode notification,
+			// 重复追加会在每次重启时累积,污染 LLM 上下文。
+			msg := modeNotification(m.mode, m.activeModelRole)
+			m.history = append(m.history, agent.ChatMessage{Role: "assistant", Content: msg})
+			m.appendChat("assistant", msg)
+			if m.session != nil {
+				_ = m.session.Append("assistant", msg)
+			}
 		}
 	}
 
@@ -802,6 +827,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agent.HistoryUpdateMsg:
 		m.history = msg.History
+		// 持久化完整 history(含 tool_calls / tool results)到 binary gob 文件,
+		// 重启时可直接反序列化恢复,无需重建。
+		if m.session != nil {
+			_ = m.session.SaveGob("history.gob", m.history)
+		}
 		return m, agent.ListenToStream(m.streamCh)
 
 	case agent.ModelSwitchMsg:
@@ -908,6 +938,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.history = kept
 
 		_ = m.session.SaveSummary(msg.summary, keptCount)
+		// 压缩后 history 已截断,写回 gob 保持下轮启动一致性
+		if m.session != nil {
+			_ = m.session.SaveGob("history.gob", m.history)
+		}
 
 		m.chatContent.WriteString(fmt.Sprintf("\n---\n**已压缩会话历史（%d 轮→摘要）**\n\n", msg.compressedTurns))
 		m.refreshViewport()
@@ -1118,6 +1152,41 @@ func rolePrefix(role string) string {
 func (m *model) appendChat(role, text string) {
 	m.chatContent.WriteString(rolePrefix(role) + text + "\n\n")
 	m.refreshViewport()
+}
+
+// rebuildChatFromHistory 从完整 []ChatMessage 重建 chatContent 显示文本。
+// 显示规则:
+//   - user: 非空 content 显示为用户消息
+//   - assistant: 非空 content 显示为助手回复;有 ToolCalls 时渲染工具调用行
+//   - tool: 标记 ✓ 结果完成(不展示冗长的 tool result 原文)
+//   - system: 跳过
+func rebuildChatFromHistory(history []agent.ChatMessage) string {
+	var buf strings.Builder
+	for _, msg := range history {
+		switch msg.Role {
+		case "user":
+			if msg.Content != "" {
+				buf.WriteString(rolePrefix("You") + msg.Content + "\n\n")
+			}
+		case "assistant":
+			if msg.Content != "" {
+				buf.WriteString(rolePrefix("deepx") + msg.Content + "\n\n")
+			}
+			// 工具调用行:跟直播流 ToolCallStartMsg 相同的格式
+			for _, tc := range msg.ToolCalls {
+				line := formatToolCallLine(tc.Function.Name, tc.Function.Arguments)
+				buf.WriteString(line + "\n")
+			}
+		case "tool":
+			// 工具结果只标记完成,不展示全量输出(跟直播流 ToolCallResultMsg 一致)
+			icon, ok := toolIcons[msg.Name]
+			if !ok {
+				icon = defaultToolIcon
+			}
+			buf.WriteString("  " + icon + " ✓ " + msg.Name + "\n")
+		}
+	}
+	return buf.String()
 }
 
 // trimDisplayTurns 扫描 chatContent 中的 user 前缀计数,超过 10 轮则裁剪旧轮。

@@ -227,10 +227,7 @@ var Tools = []Tool{
 			"或代码里某个依赖/API 的官方说明你不确定。本工具只是检索摘要,要看完整内容仍需后续访问 URL。" +
 			"\n\n**何时不要调用**:用户问的是当前 workspace 的代码细节(用 Read/Grep)、" +
 			"通用编程常识、或你已经能给出可靠回答的问题 — 别为了凑 token 滥用搜索。" +
-			"\n\n**Provider 选择**(由 env 决定,工具自身不需要参数):" +
-			"\n  - 默认 Bing HTML 抓取,零配置,国内可用 (cn.bing.com 直连)" +
-			"\n  - DEEPX_SEARCH_API_KEY=bocha:<key>  → 博查 AI (国内厂商, 质量更好)" +
-			"\n  - DEEPX_SEARCH_API_KEY=tavily:<key> → Tavily (海外, LLM 友好)",
+			"\n\n**后端**:Bing HTML 抓取,零配置、无需 API key,国内可用 (cn.bing.com 直连)。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{

@@ -1,15 +1,12 @@
 package tools
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	stdhtml "html"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -24,20 +21,10 @@ type webResult struct {
 	Snippet string
 }
 
-// searchProvider 抽象不同后端 (Bing HTML 抓取 / Bocha API / Tavily API ...)
-type searchProvider interface {
-	name() string
-	search(query string, maxResults int) ([]webResult, error)
-}
-
 // === 工具入口 ===
 
 // WebSearch 是 OpenAI-style 工具入口,被 tools.go 的工具表注册并由 LLM 调用。
-//
-// 选 provider 的优先级:
-//  1. env DEEPX_SEARCH_API_KEY=bocha:<key>   → 博查 AI(国内厂商,JSON API)
-//  2. env DEEPX_SEARCH_API_KEY=tavily:<key>  → Tavily(海外,LLM 友好)
-//  3. 默认 → Bing HTML 抓取,先试 cn.bing.com 再试 www.bing.com,零配置可用
+// 后端固定走 Bing HTML 抓取(先试 cn.bing.com 再试 www.bing.com),零配置、无需任何 API key。
 func WebSearch(args map[string]any) ToolResult {
 	query, _ := args["query"].(string)
 	query = strings.TrimSpace(query)
@@ -52,15 +39,10 @@ func WebSearch(args map[string]any) ToolResult {
 		maxResults = 15
 	}
 
-	prov := pickProvider()
-	results, err := prov.search(query, maxResults)
+	results, err := (&bingProvider{}).search(query, maxResults)
 	if err != nil {
 		return ToolResult{
-			Output: fmt.Sprintf(
-				"搜索失败 (provider=%s): %v\n\n如果当前网络限制 Bing,可设环境变量切换 provider:\n"+
-					"  DEEPX_SEARCH_API_KEY=bocha:<your-key>   (博查 AI, 国内)\n"+
-					"  DEEPX_SEARCH_API_KEY=tavily:<your-key>  (Tavily, 海外)",
-				prov.name(), err),
+			Output:  fmt.Sprintf("搜索失败 (Bing): %v\n\n可能是当前网络无法访问 Bing,稍后重试或检查网络。", err),
 			Success: false,
 		}
 	}
@@ -68,17 +50,6 @@ func WebSearch(args map[string]any) ToolResult {
 		return ToolResult{Output: fmt.Sprintf("\"%s\" 无结果", query), Success: true}
 	}
 	return ToolResult{Output: formatWebResults(query, results), Success: true}
-}
-
-func pickProvider() searchProvider {
-	key := strings.TrimSpace(os.Getenv("DEEPX_SEARCH_API_KEY"))
-	if strings.HasPrefix(key, "bocha:") {
-		return &bochaProvider{apiKey: strings.TrimPrefix(key, "bocha:")}
-	}
-	if strings.HasPrefix(key, "tavily:") {
-		return &tavilyProvider{apiKey: strings.TrimPrefix(key, "tavily:")}
-	}
-	return &bingProvider{}
 }
 
 func formatWebResults(query string, results []webResult) string {
@@ -94,11 +65,9 @@ func formatWebResults(query string, results []webResult) string {
 	return sb.String()
 }
 
-// === Provider 1: Bing HTML 抓取(默认,零配置)===
+// === Bing HTML 抓取(唯一后端,零配置)===
 
 type bingProvider struct{}
-
-func (b *bingProvider) name() string { return "bing-html" }
 
 func (b *bingProvider) search(query string, n int) ([]webResult, error) {
 	// 先尝试国内域名 cn.bing.com,失败回退国际版 www.bing.com。
@@ -191,123 +160,4 @@ func cleanHTMLText(s string) string {
 	s = stdhtml.UnescapeString(s)
 	s = wsRe.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
-}
-
-// === Provider 2: 博查 (Bocha) AI Search ===
-
-type bochaProvider struct {
-	apiKey string
-}
-
-func (b *bochaProvider) name() string { return "bocha" }
-
-func (b *bochaProvider) search(query string, n int) ([]webResult, error) {
-	if b.apiKey == "" {
-		return nil, errors.New("bocha api key 未配置")
-	}
-	payload := map[string]any{
-		"query":     query,
-		"count":     n,
-		"freshness": "noLimit",
-		"summary":   true,
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST",
-		"https://api.bochaai.com/v1/web-search", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+b.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
-	}
-	var raw struct {
-		Data struct {
-			WebPages struct {
-				Value []struct {
-					Name    string `json:"name"`
-					URL     string `json:"url"`
-					Snippet string `json:"snippet"`
-					Summary string `json:"summary"`
-				} `json:"value"`
-			} `json:"webPages"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, err
-	}
-	var out []webResult
-	for _, p := range raw.Data.WebPages.Value {
-		snip := p.Summary
-		if snip == "" {
-			snip = p.Snippet
-		}
-		out = append(out, webResult{Title: p.Name, URL: p.URL, Snippet: snip})
-		if len(out) >= n {
-			break
-		}
-	}
-	return out, nil
-}
-
-// === Provider 3: Tavily (海外, LLM 友好) ===
-
-type tavilyProvider struct {
-	apiKey string
-}
-
-func (t *tavilyProvider) name() string { return "tavily" }
-
-func (t *tavilyProvider) search(query string, n int) ([]webResult, error) {
-	if t.apiKey == "" {
-		return nil, errors.New("tavily api key 未配置")
-	}
-	payload := map[string]any{
-		"api_key":     t.apiKey,
-		"query":       query,
-		"max_results": n,
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST",
-		"https://api.tavily.com/search", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
-	}
-	var raw struct {
-		Results []struct {
-			Title   string `json:"title"`
-			URL     string `json:"url"`
-			Content string `json:"content"`
-		} `json:"results"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, err
-	}
-	var out []webResult
-	for _, r := range raw.Results {
-		out = append(out, webResult{Title: r.Title, URL: r.URL, Snippet: r.Content})
-		if len(out) >= n {
-			break
-		}
-	}
-	return out, nil
 }

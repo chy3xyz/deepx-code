@@ -35,9 +35,14 @@ func padLinesToWidth(content string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
-// widthFunc 是运行时选定的宽度测量函数。不同终端对带 VS16 的 emoji 处理不同:
-//   - macOS Terminal.app:忽略 VS16,`🌦️` = 1 cell → 用 WcWidth
-//   - iTerm2 / WezTerm / Kitty / Ghostty:认 VS16,`🌦️` = 2 cell → 用 GraphemeWidth
+// widthFunc 是运行时选定的宽度测量函数。关键差异是终端是否 honor VS16(U+FE0F):
+//   - 不认 VS16 的终端把 `🌤️` 这类"基础符号 + VS16" emoji 渲染成 1 cell → 用 WcWidth
+//   - 认 VS16 的终端把它渲染成 2 cell → 用 GraphemeWidth
+//
+// 归属:
+//   - macOS Terminal.app:不认 VS16 → WcWidth
+//   - VSCode 集成终端(xterm.js, 默认 unicodeVersion=6):同样不认 VS16,`🌤️` = 1 cell → WcWidth
+//   - iTerm2 / WezTerm / Kitty / Ghostty / Alacritty:认 VS16 → GraphemeWidth
 //
 // 启动时按 TERM_PROGRAM / 终端 env 变量选,匹配实际渲染行为,避免 divider 在含 emoji 的
 // 行被推偏。未知终端默认 WcWidth(更保守 — 多数终端不严格 honors VS16)。
@@ -49,9 +54,9 @@ func init() {
 
 func detectWidthFunc() func(string) int {
 	switch os.Getenv("TERM_PROGRAM") {
-	case "Apple_Terminal":
+	case "Apple_Terminal", "vscode":
 		return ansi.StringWidthWc
-	case "iTerm.app", "WezTerm", "ghostty", "vscode":
+	case "iTerm.app", "WezTerm", "ghostty":
 		return ansi.StringWidth // GraphemeWidth 口径,认 VS16
 	}
 	if os.Getenv("KITTY_WINDOW_ID") != "" {

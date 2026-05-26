@@ -1,256 +1,283 @@
+<div align="center">
+
 # deepx-code
 
-[简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | **한국어**
+**DeepSeek 네이티브 터미널 코딩 에이전트 —— 단일 바이너리, 캐시 친화적, 코드 그래프와 로컬 OCR 내장**
 
-> DeepSeek 표준 코딩 에이전트. 로컬 OCR 이미지 인식, 자동 컨텍스트 압축, 네이티브 codegraph 지원. 토큰 소비를 근본적으로 줄입니다.
+[![Go](https://img.shields.io/badge/built%20with-Go-00ADD8?logo=go&logoColor=white)](https://go.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/itmisx/deepx-code?color=success)](https://github.com/itmisx/deepx-code/releases) [![Stars](https://img.shields.io/github/stars/itmisx/deepx-code?style=flat)](https://github.com/itmisx/deepx-code/stargazers) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-![deepx screenshot](assets/screenshot.jpg)
+[简体中文](README.md) · [English](README.en.md) · [日本語](README.ja.md) · **한국어**
 
-## 왜 deepx 인가
+![deepx-code demo](assets/demo.gif)
 
-- 🚀 Go 로 개발되어 작고 빠르며 모든 플랫폼 지원.
-- 🚀 gob 바이너리 영속화. `tool_calls`, tool results, `reasoning_content` 를 모두 보존해 LLM 이 끊김 없이 이어받음.
-- 🚀 계층 압축 + 기존 요약 병합.
-- 🚀 skill, MCP 기본 탑재로 기존 Claude 생태계에 매끄럽게 통합.
-- 🚀 로컬 키워드 라우팅. 제로 레이턴시, 제로 토큰으로 매칭 시 곧바로 pro 로 승급.
-- 🚀 자동 모델 전환. 문제 복잡도에 따라 pro 모델로 자동 승급.
-- 🚀 Plan DAG 동시 스케줄링. 의존 관계에 따라 서브 에이전트를 병렬 실행하며 각 노드가 독자적으로 모델 선택.
-- 🚀 로컬 OCR (PaddleOCR). 오프라인 인식으로 멀티모달 API 에 의존하지 않음.
-- 🚀 코드 그래프 (codeGraph). read/glob/grep 의 토큰 낭비를 크게 줄임.
+</div>
 
-## 빠른 시작
+> [!TIP]
+> **⚡ 긴 세션에서 prompt-cache 적중률 ~99% 실측**（실제 세션: 41,591 토큰 중 41,472 적중）. DeepSeek은 캐시 적중 입력을 캐시 미스의 수십분의 1로 과금하므로（[공식 가격](https://api-docs.deepseek.com/quick_start/pricing)）, 긴 실행에서도 반복되는 컨텍스트에 거의 과금되지 않습니다.
 
-### 설치
+---
 
-- macOS / Linux
+## ✨ 핵심 기능
+
+- **🦫 단일 Go 바이너리** —— Node / Python 런타임 불필요, `curl` 한 줄 설치, macOS / Linux / Windows 지원.
+- **💰 캐시 친화적, 긴 세션도 저렴** —— DeepSeek 프리픽스 캐시를 중심으로 설계(실측 ~99% 적중). 로컬 키워드 라우팅은 매 턴 지연 0·토큰 0으로 시작.
+- **🧭 코드 그래프 내장(codegraph)** —— 심볼 단위 정의 이동 / 호출자 / 인터페이스 구현 / 영향 범위. Go는 `go/types`로 정확히 해석하여 저장소 전체 grep을 대체.
+- **👀 로컬 이미지 OCR(PaddleOCR)** —— 스크린샷의 텍스트를 오프라인으로 읽고, 멀티모달 API 불필요.
+- **🧠 듀얼 모델 자동 라우팅** —— 가벼운 작업은 flash, 복잡한 작업은 자동으로 pro 승격. `/auto` `/plan` `/review`로 수동 제어도 가능.
+- **🗂️ 순차 Todo + 병렬 Plan DAG** —— 다단계 작업은 보이는 체크리스트로 한 단계씩. 독립적인 병렬 작업은 DAG로 분해해 서브 에이전트를 병렬 실행.
+- **💾 무손실 세션 영속화** —— gob가 `tool_calls` / 도구 결과 / `reasoning_content`를 완전 보존해 재시작 후에도 매끄럽게 이어감. 윈도가 차면 자동 계층 압축.
+- **🔌 MCP + Skill 생태계** —— MCP 네이티브 지원. Claude의 skill 디렉터리와 호환되어 기존 skill을 그대로 재사용.
+- **🛡️ 검토 모드** —— 파일 쓰기 / Shell 실행은 기본적으로 사람의 확인을 요구.
+
+## 📊 Claude Code 비교
+
+|                     | **deepx-code**                          | Claude Code              |
+| :------------------ | :-------------------------------------- | :----------------------- |
+| 배포                | 단일 Go 바이너리, `curl` 한 줄           | Node(npm)                |
+| 오픈소스            | ✅ MIT                                  | ❌ 비공개                |
+| 모델                | DeepSeek(flash/pro 자동 라우팅, 자기 key) | Anthropic Claude        |
+| 비용                | 긴 세션 ~99% 캐시 적중                   | 구독 / Claude API 사용량  |
+| 코드 그래프 내장    | ✅ codegraph(Go는 `go/types`로 정확)     | ❌(grep / 검색)          |
+| 로컬·오프라인 OCR   | ✅ PaddleOCR                            | ❌(이미지는 클라우드 멀티모달) |
+| MCP                 | ✅                                      | ✅                       |
+| Skill 생태계        | ✅(Claude skill 디렉터리 재사용)         | ✅                       |
+
+> [!NOTE]
+> 이 표는 모델 품질 자체를 비교하지 않습니다. deepx-code의 선택은 **비용·오픈소스·단일 바이너리·내장 코드 그래프·오프라인 OCR** 입니다.
+
+## 🚀 빠른 시작
+
+**1. 설치**
 
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash
-```
 
-- Windows (PowerShell)
-
-```bash
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1 | iex
 ```
 
-## 사용법
+`~/.local/bin/deepx`에 설치됩니다. `deepx upgrade`로 언제든 업데이트.
 
-### 워크스페이스 진입
+**2. 프로젝트로 이동해 실행**
 
 ```bash
-cd <당신의 프로젝트 디렉터리>
+cd <당신의 프로젝트>
 deepx
 ```
 
-### DeepSeek API KEY 설정
+**3. 설정**
 
-최초 실행 시 설정 창이 뜨며, 거기서 API key 를 설정합니다.
+| 항목          | 방법                                                         |
+| :------------ | :----------------------------------------------------------- |
+| DeepSeek Key  | 첫 실행 시 마법사로 입력해 `~/.deepx/model.yaml`에 저장(기본값 `deepseek-v4-flash` / `deepseek-v4-pro`, 1M 컨텍스트). `/config`로 재설정. |
+| Skill         | `<워크스페이스>/.deepx/skills/`에 두거나 `~/.claude/skills/` 등 재사용. |
+| MCP           | TUI에서 `/mcp-add`로 추가, `/mcp-list`로 목록 확인.          |
 
-### Skill 설정
+## 🧠 동작 원리
 
-현재 디렉터리의 `.deepx/skills/` 에 배치합니다.
+<details>
+<summary><b>모델 라우팅(로컬, 지연 0, 토큰 0)</b></summary>
 
-### MCP 설정
-
-`/mcp-add` 명령으로 MCP 를 추가합니다.
-
-## 핵심 메커니즘
-
-### 모델 라우팅 (로컬, 제로 레이턴시)
-
-사용자 메시지가 도착하면 deepx 는 로컬에서 키워드 매칭 + 길이 판정을 수행합니다:
+메시지가 도착하면 deepx는 로컬에서 키워드 매칭 + 길이 판정을 수행하여, 추가 LLM 토큰 없이 시작 모델을 즉시 결정합니다:
 
 ```
-메시지에 "重构/refactor/architecture/调试…" 포함 → 곧바로 pro 로 승급
-메시지 길이 < 100 자                            → flash
-메시지 길이 > 500 자                            → pro
+"리팩터링 / refactor / architecture / 디버깅 …" 포함 → 바로 pro
+길이 < 100자                                         → flash
+길이 > 500자                                         → pro
 ```
 
-중국어(간체/번체) / 영어 / 일본어 / 한국어 5개 언어 지원. **라우팅은 순식간에 일어나며 추가 LLM 토큰을 전혀 소비하지 않습니다.**
+중국어(간체 / 번체) / 영어 / 일본어 / 한국어를 지원. 턴 도중에도 모델은 어려운 추론을 위해 `SwitchModel`로 pro 승격이 가능합니다.
 
-### 세션 영속화 (gob 바이너리)
+</details>
+
+<details>
+<summary><b>세션 영속화(gob 바이너리, 무손실 복원)</b></summary>
 
 ```
 ~/.deepx/sessions/<sha1(workspace)[:16]>/
 ├── meta.json          # 워크스페이스 메타 정보
-├── state.json         # 압축 상태 (summary + total_turns)
-├── YYYY-MM-DD.jsonl   # 텍스트 로그 (Memory 검색용)
+├── state.json         # 압축 상태 + 사용량 스냅샷
+├── YYYY-MM-DD.jsonl   # 텍스트 로그(Memory 검색용)
 └── history.gob        # 완전한 바이너리 히스토리
 ```
 
-| 포맷               | 저장 내용                                                                            | 용도                              |
-| :----------------- | :----------------------------------------------------------------------------------- | :-------------------------------- |
-| `history.gob`      | system + user + assistant (`tool_calls`, tool results, `reasoning_content` 포함)     | **재시작 복원, LLM 끊김 없는 이어받기** |
-| `YYYY-MM-DD.jsonl` | user / assistant 순수 텍스트 (모드 알림 포함)                                         | Memory 도구 검색                  |
+| 형식               | 저장 내용                                                               | 용도                          |
+| :----------------- | :--------------------------------------------------------------------- | :---------------------------- |
+| `history.gob`      | system + user + assistant(`tool_calls`·도구 결과·`reasoning_content` 포함) | **재시작 복원, 매끄러운 이어가기** |
+| `YYYY-MM-DD.jsonl` | user / assistant 일반 텍스트                                            | Memory 도구 검색              |
 
-재시작 시 gob 을 우선 로드하고, 실패하면 JSONL 로 폴백합니다. system prompt 가 build 升级나 skill 변경으로 바뀌면 gob 복원 시 현재 버전으로 그 자리에서 교체됩니다.
+재시작 시 gob를 우선 로드하고 실패하면 JSONL로 폴백. 업그레이드나 skill 변경으로 system prompt가 바뀌면 gob 복원 시 현재 버전으로 투명하게 교체하여 캐시 프리픽스를 안정적으로 유지합니다.
 
-### 세션 압축
+</details>
 
-긴 대화가 컨텍스트 윈도우의 70% 를 초과하면 자동으로 트리거됩니다. 꼬리 부분을 계층적으로 약 20K 토큰 유지하고, 오래된 내용을 LLM 이 생성한 일관된 요약으로 압축해 기존 요약과 병합합니다. **압축 후 gob 도 동기화 업데이트**되어 재시작해도 일관됩니다.
+<details>
+<summary><b>세션 압축(계층 + 요약 병합)</b></summary>
 
-### Plan DAG 동시 스케줄링
+컨텍스트 윈도의 70%를 넘으면 자동 발동: 꼬리 부분에 약 20K 토큰을 계층적으로 남기고, 오래된 내용은 LLM이 일관된 요약으로 압축해 기존 요약과 병합합니다. gob도 갱신되어 재시작 후에도 일관됩니다.
 
-모델은 `CreatePlan` 도구로 복잡한 작업을 DAG 노드로 분할하고, deepx 는 의존 관계에 따라 동시 서브 에이전트를 실행합니다:
+</details>
+
+<details>
+<summary><b>작업 계획: Todo(순차) vs Plan DAG(병렬)</b></summary>
+
+- **Todo** —— 다단계·순차·컨텍스트 의존 작업(예: 앱을 처음부터 구축): 모델이 보이는 체크리스트에 단계를 나열하고 하나씩 체크하며 스스로 실행해, 실시간 진행 상황을 보여줍니다.
+- **CreatePlan(Plan DAG)** —— 진짜로 병렬·독립적인 팬아웃: DAG로 분해해 의존 순서대로 병렬 서브 에이전트를 실행하고, 각 노드가 flash / pro를 선택한 뒤 집계합니다.
 
 ```
-PlanCreated
-  ├─ plan-1: Read (flash) ─────┐
-  ├─ plan-2: Read (flash) ─────┤
-  ├─ plan-3: Grep (flash) ─────┤
-  └─ plan-4: Write (pro) ──────┘ depends_on: [1,2,3]
+CreatePlan
+  ├─ plan-1: Read  (flash) ─────┐
+  ├─ plan-2: Read  (flash) ─────┤
+  ├─ plan-3: Grep  (flash) ─────┤
+  └─ plan-4: Write (pro)   ─────┘ depends_on: [1,2,3]
 ```
 
-### 리뷰 모드 (기본값)
+</details>
 
-| 모드               | Write / Update / Bash | 그 외 도구 | 전환 명령 |
-| :----------------- | :-------------------- | :--------- | :-------- |
-| `review` (기본값)  | 수동 YES/NO 확인      | 자동 실행  | `/review` |
-| `auto`             | 자동 실행             | 자동 실행  | `/auto`   |
-| `plan`             | 비활성화              | 자동 실행  | `/plan`   |
+<details>
+<summary><b>로컬 OCR(이미지 읽기 보완)</b></summary>
 
-### 로컬 OCR
+이미지를 붙여넣거나 경로를 주면 LLM이 `OCR` 도구(PaddleOCR PP-OCRv5)로 텍스트를 읽습니다. 첫 호출 시 OCR 모델(~37MB)과 ONNX runtime을 내려받고, 이후에는 **오프라인으로 수 초 내** 응답. 멀티모달 API 없이도 에러 스크린샷이나 UI 목업을 에이전트가 "읽을" 수 있습니다.
 
-Ctrl+V 로 이미지 붙여넣기 → deepx 가 자동으로 디스크에 저장 → LLM 이 `OCR` 도구(PaddleOCR PP-OCRv5)로 이미지 속 텍스트를 인식. 최초에는 ~37MB 모델을 자동 다운로드하고 이후에는 초 단위로 응답합니다. **DeepSeek 은 멀티모달을 지원하지 않으며, 로컬 OCR 이 최대 약점을 보완합니다.**
+</details>
 
-### 코드 그래프
+### 🧭 코드 그래프(codegraph)
 
-deepx 는 코드 그래프 엔진을 내장하고 있습니다. 모델은 심볼 수준 내비게이션 + 호출 관계 쿼리를 직접 수행할 수 있어, 저장소 전체 grep 과 파일을 하나씩 넘겨보는 작업을 대체합니다.
+심볼 그래프 엔진을 내장하여, 저장소 전체 grep과 파일을 하나씩 여는 대신 모델이 심볼 단위 내비게이션 + 호출 관계 쿼리를 직접 수행합니다.
 
-**연산 빠른 참조표**
+<details>
+<summary><b>op 치트시트(12개)</b></summary>
 
-| op             | 용도                       | 필수 파라미터               | 설명                                                  |
-| :------------- | :------------------------- | :-------------------------- | :---------------------------------------------------- |
-| `def`          | 심볼 정의 위치             | `name`                      | 함수/타입/메서드/변수의 정의 위치                     |
-| `refs`         | 심볼을 사용하는 곳         | `name`                      | 모든 참조 (정의 + 호출 + 값 취득)                     |
-| `symbols`      | 이름으로 심볼 퍼지 검색    | `name`(선택), `kind`(선택)  | `kind` 필터: func/method/type/var/const/field         |
-| `outline`      | 파일 내 심볼 목록          | `path`                      | 파일 아웃라인                                         |
-| `imports`      | 파일이 import 하는 패키지  | `path`                      | 의존성 개요                                           |
-| `callers`      | 함수를 호출하는 곳         | `name`                      | **함수 변경 시 영향 범위 확인**, Go 암묵 인터페이스도 포함 |
-| `callees`      | 함수가 호출하는 것         | `name`                      | 함수 내부 처리 흐름 이해                              |
-| `implementers` | 인터페이스 구현체          | `name`                      | Go 암묵 인터페이스를 **심볼 수준으로 정확히**, grep 으로는 안 나옴 |
-| `subtypes`     | 타입을 상속/임베드한 것    | `name`                      | 서브타입 추적                                         |
-| `supertypes`   | 타입의 파생 원본           | `name`                      | 부모 타입 / 임베드 인터페이스                         |
-| `impact`       | 심볼 변경이 미치는 하류    | `name`, `depth`(기본3)      | 추이 폐포, blast radius 분석                          |
-| `reindex`      | 인덱스 강제 재구축         | —                           | 캐시 이상 시 수동 트리거                              |
+| op             | 용도                       | 필수                       | 설명                                            |
+| :------------- | :------------------------- | :------------------------- | :---------------------------------------------- |
+| `def`          | 심볼 정의 위치              | `name`                    | 함수 / 타입 / 메서드 / 변수의 정의 위치         |
+| `refs`         | 심볼 사용처                 | `name`                    | 모든 참조(정의 + 호출 + 읽기)                   |
+| `symbols`      | 이름으로 퍼지 검색          | `name`(선택), `kind`(선택) | `kind`: func/method/type/var/const/field        |
+| `outline`      | 파일 내 심볼 목록           | `path`                    | 파일 아웃라인                                   |
+| `imports`      | 파일의 import 목록          | `path`                    | 의존성 개요                                     |
+| `callers`      | 함수의 호출자               | `name`                    | **변경 시 영향 범위**, Go 암시적 인터페이스도 포함 |
+| `callees`      | 함수가 호출하는 것          | `name`                    | 내부 흐름 이해                                  |
+| `implementers` | 인터페이스 구현자           | `name`                    | Go 암시적 인터페이스를 **심볼 정밀도**로. grep 불가 |
+| `subtypes`     | 타입을 상속 / 임베드하는 것 | `name`                    | 서브타입 추적                                   |
+| `supertypes`   | 타입의 파생 원본            | `name`                    | 슈퍼타입 / 임베드 인터페이스                    |
+| `impact`       | 변경의 하위 영향            | `name`, `depth`(기본 3)   | 전이 폐포, 영향 범위 분석                       |
+| `reindex`      | 인덱스 강제 재구축          | —                          | 캐시 이상 시 수동 트리거                        |
 
-**CodeGraph 와 Grep 의 구분**
-
-| 시나리오                              |               사용                 |
-| :------------------------------------ | :--------------------------------: |
-| 함수/타입/변수 정의 또는 참조         |    ✅ CodeGraph `def` / `refs`     |
-| 호출 체인 상류/하류                   | ✅ CodeGraph `callers` / `callees` |
-| 인터페이스 구현 관계                  |    ✅ CodeGraph `implementers`     |
-| 코드 변경의 영향 범위                 |       ✅ CodeGraph `impact`        |
-| 파일 내 심볼                          |       ✅ CodeGraph `outline`       |
-| 주석/문자열/설정 내 텍스트            |              ❌ Grep               |
-| 비코드 파일 (JSON/MD/Shell/YAML)      |              ❌ Grep               |
-| 심볼명이 불확실하고 퍼지 검색         |     ✅ `symbols` + `kind` 필터     |
+</details>
 
 **지원 언어**: Go(stdlib 정밀 파싱) + TypeScript / JavaScript / Python / Java / Rust / C / C++ / C# / Ruby / PHP / Kotlin / Swift / Scala / Dart / Vue / Svelte.
 
-**동작 원리**: 시작 시 백그라운드 `Prewarm` 이 자동으로 인덱스를 구축하며, 상태 표시줄에 `loading → ready` 가 표시됩니다. 파일이 Write/Update 도구로 수정되면 `stale` 로 표시되고 다음 쿼리 시 증분 재구축됩니다. 결과는 `파일:줄`(시그니처/호출자 포함)로 표시되며 상한을 초과하면 자동으로 잘려 페이징됩니다.
+**동작**: 시작 시 백그라운드 `Prewarm`이 인덱스를 구축(`loading → ready`). Write/Update로 변경된 파일은 `stale`로 표시되어 다음 쿼리에서 증분 재구축. 결과는 `파일:행`(시그니처 / 호출자 포함)으로 표시되고 페이지네이션됩니다.
 
-## 도구 세트
+## 🧰 도구
 
-| 유형        | 도구                               |         plan | auto | review |
-| :---------- | :--------------------------------- | -----------: | :--: | :----: |
-| 파일 읽기   | `Read` `List` `Tree` `Glob` `Grep` |            ✓ |  ✓   |   ✓    |
-| 코드 그래프 | `CodeGraph`                        |            ✓ |  ✓   |   ✓    |
-| 파일 쓰기   | `Write` `Update`                   |            ✗ |  ✓   |   ⏳   |
-| Shell       | `Bash`                             |            ✗ |  ✓   |   ⏳   |
-| 네트워크    | `Search` `Fetch`                   |            ✓ |  ✓   |   ✓    |
-| 메모리      | `Memory`                           |            ✓ |  ✓   |   ✓    |
-| 스킬        | `LoadSkill`                        |            ✓ |  ✓   |   ✓    |
-| 이미지      | `OCR`                              |            ✓ |  ✓   |   ✓    |
-| 플래닝      | `CreatePlan` `UpdatePlanStatus`    | LLM 자율 호출 |     |        |
-| 승급        | `SwitchModel`                      | LLM 자율 호출 |     |        |
+| 종류        | 도구                               |       plan | auto | review |
+| :---------- | :--------------------------------- | ---------: | :--: | :----: |
+| 읽기 전용   | `Read` `List` `Tree` `Glob` `Grep` |          ✓ |  ✓   |   ✓    |
+| 코드 그래프 | `CodeGraph`                        |          ✓ |  ✓   |   ✓    |
+| 파일 쓰기   | `Write` `Update`                   |          ✗ |  ✓   |   ⏳   |
+| Shell       | `Bash`                             |          ✗ |  ✓   |   ⏳   |
+| 웹          | `Search` `Fetch`                   |          ✓ |  ✓   |   ✓    |
+| 메모리      | `Memory`                           |          ✓ |  ✓   |   ✓    |
+| Skill       | `LoadSkill`                        |          ✓ |  ✓   |   ✓    |
+| 이미지      | `OCR`                              |          ✓ |  ✓   |   ✓    |
+| 계획        | `Todo` `CreatePlan`                | LLM이 호출 |     |        |
+| 승격        | `SwitchModel`                      | LLM이 호출 |     |        |
 
-> ⏳ = 자동 실행이지만 수동 확인 필요.
+> ⏳ = 자동 실행되지만 사람의 확인이 필요.
 
-## Slash 명령어
+## ⌨️ 슬래시 명령
 
-| 명령어    | 작용                  |
-| :-------- | :-------------------- |
-| `/plan`   | 읽기 전용 모드로 전환 |
-| `/auto`   | 완전 자동 모드로 전환 |
-| `/review` | 리뷰 모드로 전환      |
-| `/mode`   | 현재 모드 표시        |
-| `/config` | API key 재설정        |
-| `/skills` | 사용 가능한 skill 목록 |
-| `/help`   | 도움말                |
+| 명령                                 | 동작                                |
+| :----------------------------------- | :---------------------------------- |
+| `/plan` `/auto` `/review`            | 모드 전환(읽기 전용 / 자동 / 검토)  |
+| `/compact`                           | 세션 수동 압축                      |
+| `/lang`                              | UI 언어 전환(중 / 영)               |
+| `/mcp-list` `/mcp-add` `/mcp-delete` | MCP 서버 관리                       |
+| `/skills` `/config` `/mode`          | skill 목록 / key 재설정 / 모드 표시 |
+| `/help`                              | 도움말                              |
 
-## Skills 생태계
+## 🛡️ 검토 모드
 
-```
-workspace 레벨  <wd>/.deepx/skills/
-global 레벨     ~/.agents/skills/ → ~/.claude/skills/ → ~/.deepx/skills/
-```
+| 모드               | Write / Update / Bash | 기타 도구 | 명령      |
+| :----------------- | :-------------------- | :-------- | :-------- |
+| `review`(기본)     | 사람이 YES/NO 확인    | 자동 실행 | `/review` |
+| `auto`             | 자동 실행             | 자동 실행 | `/auto`   |
+| `plan`             | 비활성                | 자동 실행 | `/plan`   |
 
-- workspace 레벨은 `git add` 로 팀에 공유 가능.
-- global 레벨은 Claude Code 생태계와 호환되어 기존 skill 을 그대로 재사용.
-
-## 아키텍처
+## 📦 Skill
 
 ```
-단일 턴:
+워크스페이스  <wd>/.deepx/skills/
+글로벌        ~/.agents/skills/ → ~/.claude/skills/ → ~/.deepx/skills/
+```
+
+- 워크스페이스 단위는 `git add`로 팀과 공유 가능
+- 글로벌은 Claude Code 호환 —— 기존 skill을 그대로 재사용
+
+## 🏗️ 아키텍처
+
+<details>
+<summary><b>데이터 흐름 펼치기</b></summary>
+
+```
+1 턴:
   사용자 입력
     ↓
   RouteByKeyword (로컬) ─► flash 또는 pro
     ↓
   StartStream (메인 루프)
-    ├─ 직접 응답
-    ├─ 도구 호출 → review 가 write/Shell 차단 → 실행 → 결과 환류 → 계속
-    ├─ SwitchModel → pro 로 승급
-    └─ CreatePlan → DAG scheduler → 서브 에이전트 동시 → 집계
+    ├─ 직접 답변
+    ├─ 도구 호출 → review가 쓰기/Shell 게이트 → 실행 → 결과 회신 → 계속
+    ├─ Todo → 보이는 체크리스트(메인 에이전트가 단계별 실행)
+    ├─ SwitchModel → pro 승격
+    └─ CreatePlan → DAG scheduler → 병렬 서브 에이전트 → 집계
 
-세션 영속화:
-  HistoryUpdateMsg → SaveGob (history.gob, 완전 fidelity)
-  StreamDoneMsg  → Append JSONL (순수 텍스트, Memory 검색)
-  재시작         → LoadGob (우선) / JSONL (폴백)
+영속화:
+  HistoryUpdateMsg → SaveGob (history.gob, 완전 충실)
+  StreamDoneMsg    → Append JSONL (일반 텍스트, Memory 검색)
+  재시작           → LoadGob (우선) / JSONL (폴백)
 
-세션 압축:
+압축:
   tokens ≥ ctxWindow × 70% → runCompression (비동기)
-    → 꼬리를 계층적으로 ~20K 토큰 유지
-    → LLM 이 신구 요약 병합
-    → gob + state.json 업데이트
+    → 꼬리에 ~20K 토큰 유지 → LLM이 신·구 요약 병합 → gob + state.json 갱신
 ```
 
-## 토큰 경제
+</details>
 
-- **제로 토큰 라우팅**: 순수 로컬 키워드, LLM 호출 없음.
-- **도구 사전 주입 없음**: `Memory` / `LoadSkill` 은 호출 시에만 context 에 진입.
-- **극도로 간결한 system prompt**: 도구 간 규약 + workspace 만, 각 도구의 트리거 조건은 각자의 description 에.
-- **DeepSeek KV cache 친화적**: tools 배열은 모드에 따라 바뀌지 않고, system prompt 는 gob 복원 시 버전을 인식.
-- **코드 그래프 네이티브 지원**: 토큰 낭비를 근본부터 줄임.
-
-## 프로젝트 구조
+**디렉터리 구조**
 
 ```
 deepx/
 ├── main.go
-├── agent/          StartStream 도구 루프 + 라우팅 + DAG 스케줄링 + 서브 에이전트
-├── config/         ~/.deepx/model.yaml 읽기/쓰기
-├── session/        gob 영속화 + JSONL 로그 + 세션 압축 상태
-├── tools/          전체 도구 구현 (읽기/쓰기/검색/OCR/Memory/Skill/Plan/CodeGraph)
-├── codegraph/      코드 그래프: 정의 점프 / 호출자 찾기 / 상속 구현 / 영향 범위
-├── skill/          멀티 경로 skill 발견과 로드
-├── ocr/            PaddleOCR 래퍼 (ONNX Runtime)
-├── tui/            bubbletea TUI (입력/렌더링/클립보드/선택/대시보드)
-└── scripts/        설치 스크립트
+├── agent/      StartStream 도구 루프 + 라우팅 + DAG 스케줄러 + 서브 에이전트
+├── config/     ~/.deepx/model.yaml 읽기/쓰기
+├── session/    gob 영속화 + JSONL 로그 + 압축 상태
+├── tools/      모든 도구 구현(읽기/쓰기 / 검색 / OCR / Memory / Skill / Plan / CodeGraph)
+├── codegraph/  코드 그래프: 정의 / 호출 / 상속 구현 / 영향 범위
+├── skill/      다중 경로 skill 탐색 및 로드
+├── ocr/        PaddleOCR 래퍼(ONNX Runtime)
+├── tui/        bubbletea TUI(입력 / 렌더 / 클립보드 / 선택 / 대시보드)
+└── scripts/    설치 스크립트
 ```
 
-## 제거
+## 💰 토큰 경제
+
+- **라우팅 토큰 0**: 순수 로컬 키워드, LLM 호출 없음
+- **도구 사전 주입 없음**: `Memory` / `LoadSkill`은 호출 시에만 context에 진입
+- **system prompt 최소화**: 도구 공통 규약 + workspace만, 트리거 조건은 각 도구 description에
+- **DeepSeek KV 캐시 친화**: tools 배열은 모드 / 역할로 바뀌지 않고, system prompt는 gob 복원 시 버전 인식
+- **맹목적 검색보다 코드 그래프**: read / glob / grep 토큰 낭비를 근본부터 절감
+
+## 🩹 제거
 
 ```bash
 # macOS / Linux
 rm -f ~/.local/bin/deepx && rm -rf ~/.deepx
 
-# Windows
-# %LOCALAPPDATA%\Programs\deepx 와 %USERPROFILE%\.deepx 삭제
+# Windows: %LOCALAPPDATA%\Programs\deepx 와 %USERPROFILE%\.deepx 삭제
 ```
 
-## License
+## 📄 License
 
 [MIT](LICENSE) © 2026 itmisx

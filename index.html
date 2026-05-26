@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DeepX — 本地优先的 AI 编码 agent</title>
+    <title>deepx-code — DeepSeek 原生的终端编程 agent</title>
     <meta
       name="description"
-      content="DeepX 是 Go 写的 TUI AI 编码 agent，跑在任何 OpenAI 兼容的 LLM 上。完整上下文恢复、零延迟路由、DeepSeek 原生缓存友好。"
+      content="deepx-code 是 Go 写的 DeepSeek 原生终端编码 agent：单二进制、长会话 ~99% 缓存命中省钱、内置代码图谱与本地离线 OCR。"
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -673,20 +673,20 @@
       <div class="grid-bg"></div>
       <div class="container">
         <div class="hero-badge reveal">
-          <span class="dot"></span> Go 实现 · 单二进制 · 开源
+          <span class="dot"></span> Go 单二进制 · DeepSeek 原生 · 开源 MIT
         </div>
         <h1 class="reveal reveal-d1">
-          <span class="accent glow-green">DeepX</span><br />
-          本地优先的 AI 编码 agent
+          <span class="accent glow-green">deepx-code</span><br />
+          DeepSeek 原生的终端编程 agent
         </h1>
         <p class="tagline reveal reveal-d2">
-          gob 二进制持久化，重启就是无缝续接&nbsp;&nbsp;·&nbsp;&nbsp;零延迟关键词路由<br />
-          DeepSeek 硬盘缓存原生友好&nbsp;&nbsp;·&nbsp;&nbsp;本地 OCR 补齐视觉短板<span class="cursor"></span>
+          单二进制 · 内置代码图谱 · 本地 OCR&nbsp;&nbsp;·&nbsp;&nbsp;零延迟关键词路由<br />
+          长会话实测 ~99% 缓存命中，几乎不为重复的上下文付费<span class="cursor"></span>
         </p>
         <div class="hero-actions reveal reveal-d3">
           <a href="#install" class="btn btn-primary">快速安装</a>
           <a href="https://github.com/itmisx/deepx-code" class="btn btn-ghost" target="_blank">GitHub →</a>
-          <a href="#compare" class="btn btn-ghost">为什么选 DeepX</a>
+          <a href="#compare" class="btn btn-ghost">为什么选 deepx-code</a>
         </div>
 
         <!-- Terminal Mockup -->
@@ -699,19 +699,18 @@
             <div class="term-body">
               <div class="l"><span class="prompt">$</span> <span class="dim">cd ~/my-project</span></div>
               <div class="l"><span class="prompt">$</span> deepx</div>
-              <div class="l"><span class="dim">deepx dev (commit abc1234)</span></div>
-              <div class="l">当前模式: <span class="cyan">review</span>, 模型: <span class="amber">flash</span></div>
+              <div class="l">当前模式: <span class="cyan">auto</span>, 模型: <span class="amber">flash</span></div>
               <div class="l">&nbsp;</div>
-              <div class="l"><span class="muted"># 重启后扫码：完整上下文恢复</span></div>
-              <div class="l"><span class="muted"># (tool_calls / tool results / reasoning 全部保留)</span></div>
+              <div class="l"><span class="white">&gt; Greet 在哪定义、被谁调用？用 codegraph 查</span></div>
               <div class="l">&nbsp;</div>
-              <div class="l"><span class="green">📄 Read</span> <span class="dim">(src/main.go)</span></div>
-              <div class="l"><span class="green">🔍 Grep</span> <span class="dim">(pattern in src/)</span></div>
-              <div class="l"><span class="dim">  📄 ✓ Read</span></div>
-              <div class="l"><span class="dim">  🔍 ✓ Grep</span></div>
+              <div class="l"><span class="green">🧭 CodeGraph</span> <span class="dim">(def Greet)</span></div>
+              <div class="l"><span class="green">🧭 CodeGraph</span> <span class="dim">(callers Greet)</span></div>
+              <div class="l"><span class="dim">  定义: greet.go:6  func Greet(name string) string</span></div>
+              <div class="l"><span class="dim">  被调用: main.go:6  ← main</span></div>
               <div class="l">&nbsp;</div>
-              <div class="l"><span class="white">**🐋 deepx**: 分析完成，关键发现是……</span></div>
+              <div class="l"><span class="white">🐋 简单直接，1 处定义、1 处调用。</span></div>
               <div class="l">&nbsp;</div>
+              <div class="l"><span class="green">✓ 完成</span> <span class="dim">· 2.4s · 2 次工具调用</span></div>
               <div class="l cursor-line"><span class="prompt">$</span></div>
             </div>
           </div>
@@ -724,16 +723,16 @@
       <div class="grid-bg"></div>
       <div class="container">
         <span class="section-label reveal">对比</span>
-        <h2 class="reveal reveal-d1">主流 agent 的痛点，DeepX 的解法</h2>
+        <h2 class="reveal reveal-d1">主流 agent 的痛点，deepx-code 的解法</h2>
         <p class="section-sub reveal reveal-d2">
-          传统方案在上下文恢复、缓存利用、路由延迟上各有妥协。DeepX 从底层重新设计。
+          传统方案在上下文恢复、缓存利用、路由延迟上各有妥协。deepx-code 从底层重新设计。
         </p>
         <table class="pain-table reveal reveal-d3">
           <thead>
             <tr>
               <th>痛点</th>
               <th>主流 agent</th>
-              <th>DeepX</th>
+              <th>deepx-code</th>
             </tr>
           </thead>
           <tbody>
@@ -758,9 +757,14 @@
               <td class="vs-new"><span class="vs-badge vs-badge-new">DAG 并发</span>LLM 拆 DAG → deepx 按依赖并行跑子 agent，节点独立选模型</td>
             </tr>
             <tr>
-              <td>图片输入（DeepSeek 用户）</td>
-              <td class="vs-old"><span class="vs-badge vs-badge-old">不支持</span>DeepSeek 无多模态，发图=发不了</td>
-              <td class="vs-new"><span class="vs-badge vs-badge-new">本地 OCR</span>Ctrl+V 粘贴 → PaddleOCR 离线识别，补齐最大短板</td>
+              <td>代码导航 &amp; 理解</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">满仓 grep</span>逐个翻文件、烧 token；Go 隐式接口实现、调用关系、影响面都查不准</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">代码图谱</span>内置 codegraph：符号级 def / callers / implementers / impact，Go 经 go/types 精确</td>
+            </tr>
+            <tr>
+              <td>图片输入</td>
+              <td class="vs-old"><span class="vs-badge vs-badge-old">依赖云端</span>读图要走云端多模态 API，额外成本，离线不可用</td>
+              <td class="vs-new"><span class="vs-badge vs-badge-new">本地 OCR</span>粘贴图片 → PaddleOCR 离线识别，不依赖多模态 API</td>
             </tr>
             <tr>
               <td>写操作防护</td>
@@ -776,7 +780,7 @@
     <section>
       <div class="container">
         <span class="section-label reveal">核心能力</span>
-        <h2 class="reveal reveal-d1">六大设计亮点</h2>
+        <h2 class="reveal reveal-d1">七大设计亮点</h2>
         <p class="section-sub reveal reveal-d2">
           每个特性都在解决一个实际问题，不是堆功能。
         </p>
@@ -799,11 +803,11 @@
             </p>
           </div>
           <div class="feat-card reveal reveal-d3">
-            <div class="feat-icon">🔀</div>
-            <h3>Plan DAG 并发调度</h3>
+            <div class="feat-icon">🗂️</div>
+            <h3>顺序 Todo + 并发 Plan DAG</h3>
             <p>
-              LLM 通过 CreatePlan 工具拆解 DAG，deepx 按依赖并发调度子 agent。
-              每个节点独立选 flash / pro，结果汇总回主对话。多步任务不再串行等待。
+              多步顺序任务用可见待办清单逐步勾选，进度实时可见；可并行的独立子任务
+              拆成 DAG，deepx 按依赖并发跑子 agent，每个节点独立选 flash / pro。
             </p>
           </div>
           <div class="feat-card reveal reveal-d4">
@@ -816,10 +820,10 @@
           </div>
           <div class="feat-card reveal reveal-d5">
             <div class="feat-icon">📷</div>
-            <h3>本地离线上 OCR</h3>
+            <h3>本地离线 OCR</h3>
             <p>
-              Ctrl+V 粘贴图片 → 自动落盘 → OCR 工具（PaddleOCR PP-OCRv5）识别。
-              补齐 DeepSeek 不支持图片的最大短板。首次下载 ~37MB 模型，后续秒级。
+              粘贴图片或给出路径 → OCR 工具（PaddleOCR PP-OCRv5）识别其中文字。
+              不依赖多模态 API 也能读图。首次下载 OCR 模型（~37MB）与 ONNX runtime，之后离线秒级。
             </p>
           </div>
           <div class="feat-card reveal reveal-d6">
@@ -831,6 +835,14 @@
               DeepSeek 硬盘缓存命中率最大化。
             </p>
           </div>
+          <div class="feat-card reveal reveal-d7">
+            <div class="feat-icon">🧭</div>
+            <h3>内置代码图谱（codegraph）</h3>
+            <p>
+              符号级跳定义 / 找调用 / 接口实现 / 影响面分析。Go 经 go/types 精确解析，
+              覆盖 16+ 语言。替代满仓库 grep + 逐个翻文件，从根上省 read/glob/grep 的 token。
+            </p>
+          </div>
         </div>
       </div>
     </section>
@@ -840,7 +852,7 @@
       <div class="grid-bg"></div>
       <div class="container">
         <span class="section-label reveal">工具箱</span>
-        <h2 class="reveal reveal-d1">15 个原生工具，随需调用</h2>
+        <h2 class="reveal reveal-d1">一套原生工具，随需调用</h2>
         <p class="section-sub reveal reveal-d2">
           LLM 自主按需调用，不预注入不占 token。三分级模式控制写操作。
         </p>
@@ -852,7 +864,8 @@
           <div class="tool-chip reveal reveal-d1"><span class="chip-icon">🌲</span> Tree</div>
           <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🔎</span> Glob</div>
           <div class="tool-chip reveal reveal-d1"><span class="chip-icon">🔍</span> Grep</div>
-          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🐚</span> Bash</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🧭</span> CodeGraph</div>
+          <div class="tool-chip reveal reveal-d1"><span class="chip-icon">🐚</span> Bash</div>
           <div class="tool-chip reveal reveal-d1"><span class="chip-icon">🌐</span> Search</div>
           <div class="tool-chip reveal reveal-d2"><span class="chip-icon">📡</span> Fetch</div>
           <div class="tool-chip reveal reveal-d1"><span class="chip-icon">👀</span> OCR</div>
@@ -860,6 +873,7 @@
           <div class="tool-chip reveal reveal-d1"><span class="chip-icon">📜</span> LoadSkill</div>
           <div class="tool-chip reveal reveal-d2"><span class="chip-icon">🚀</span> SwitchModel</div>
           <div class="tool-chip reveal reveal-d1"><span class="chip-icon">📋</span> CreatePlan</div>
+          <div class="tool-chip reveal reveal-d2"><span class="chip-icon">📌</span> Todo</div>
         </div>
       </div>
     </section>
@@ -886,7 +900,7 @@
           <span class="arch-arrow">→</span>
           <div class="arch-node">
             <div class="n-title">LLM 工具循环</div>
-            <div class="n-sub">直接答 / 调工具 / CreatePlan</div>
+            <div class="n-sub">直接答 / 调工具 / Todo / CreatePlan</div>
           </div>
           <span class="arch-arrow">→</span>
           <div class="arch-node">

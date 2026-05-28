@@ -4,7 +4,7 @@
 
 **DeepSeek 原生的终端编程 Agent —— 单二进制、缓存友好、内置代码图谱与本地 OCR**
 
-[![Go](https://img.shields.io/badge/built%20with-Go-00ADD8?logo=go&logoColor=white)](https://go.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/itmisx/deepx-code?color=success)](https://github.com/itmisx/deepx-code/releases) [![Stars](https://img.shields.io/github/stars/itmisx/deepx-code?style=flat)](https://github.com/itmisx/deepx-code/stargazers) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+[![Go](https://img.shields.io/badge/built%20with-Go-00ADD8?logo=go&logoColor=white)](https://go.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/chy3xyz/deepx-code?color=success)](https://github.com/chy3xyz/deepx-code/releases) [![Stars](https://img.shields.io/github/stars/chy3xyz/deepx-code?style=flat)](https://github.com/chy3xyz/deepx-code/stargazers) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 简体中文 · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
@@ -51,10 +51,10 @@
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chy3xyz/deepx-code/main/scripts/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/chy3xyz/deepx-code/main/scripts/install.ps1 | iex
 ```
 
 安装到 `~/.local/bin/deepx`，随时用 `deepx upgrade` 升级。
@@ -280,4 +280,4 @@ rm -f ~/.local/bin/deepx && rm -rf ~/.deepx
 
 ## 📄 License
 
-[MIT](LICENSE) © 2026 itmisx
+[MIT](LICENSE) © 2026 chy3xyz

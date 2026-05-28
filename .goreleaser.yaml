@@ -88,7 +88,7 @@ changelog:
 
 release:
   github:
-    owner: itmisx
+    owner: chy3xyz
     name: deepx-code
   draft: false
   prerelease: auto
@@ -98,5 +98,5 @@ release:
 
     一键安装(macOS / Linux):
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/chy3xyz/deepx-code/main/scripts/install.sh | bash
     ```

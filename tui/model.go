@@ -40,8 +40,11 @@ type model struct {
 	input textarea.Model
 
 	// 整套连接配置 (per-role BaseURL/Model/APIKey),从 ~/.deepx/model.yaml 读取后传入。
-	// 旧的 apiKey/baseURL 单独字段已合并到 models 里,通过 models.Flash.XX / models.Pro.XX 访问。
-	models agent.ModelConfig
+	// 旧的 models ModelConfig 已替换为 ProviderManager,支持多 provider + 配额 + 回退。
+	pm *agent.ProviderManager
+
+	// activeProvider 是当前实际使用的 provider 名(agent.ProviderSwitchMsg 到达时更新)。
+	activeProvider string
 
 	// 配置 modal 状态:
 	//   - showSetup       = true 时 View() 弹模态,Update() 路由按键给 setupInput
@@ -145,9 +148,10 @@ type model struct {
 
 	// 重启缓存友好压缩:detectRestartCompaction 检测到前缀变化时暂存上次前缀快照,
 	// Init 时用 restartCompactionCmd 在首请求前跑一次压缩(见 prefix_cache.go)。
-	pendingCompactModel string
-	pendingCompactSys   string
-	pendingCompactTools string
+	pendingCompactModel    string
+	pendingCompactProvider string
+	pendingCompactSys      string
+	pendingCompactTools    string
 
 	// compacting:压缩 Cmd 在飞时为 true。三个触发点(70%/重启/空闲)都 gate 在它上,
 	// 防止并发压缩(否则第二个结果的 cutIdx 会越界已截断的 history → panic)。
@@ -178,6 +182,13 @@ type model struct {
 	showMcpDelete bool
 	mcpDelNames   []string
 	mcpDelIdx     int
+
+	// /provider modal:选择 provider + 填 api key
+	showProviderModal   bool
+	providerSelectIdx   int
+	providerStep        int // 0=选 provider, 1=填 key
+	providerApiKeyInput textinput.Model
+	providerApiKeyErr   string
 
 	// 版本信息。version 是 build 时注入的当前版本号(go build 默认 "dev")。
 	// latestVersion 是异步检查得到的 GitHub latest release,空则没检查到 / 网络失败。
@@ -231,7 +242,7 @@ type compressionResultMsg struct {
 	manual          bool // true = /compact 手动触发:失败要给用户反馈,而非像后台触发那样静默
 }
 
-func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub *web.Hub, webURL string) model {
+func initialModel(pm *agent.ProviderManager, needsSetup bool, version string, hub *web.Hub, webURL string) model {
 	vp := viewport.New()
 
 	sp := spinner.New()
@@ -279,13 +290,19 @@ func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub
 	mi.CharLimit = 512
 	mi.SetWidth(54)
 
+	pi := textinput.New()
+	pi.Placeholder = "sk-..."
+	pi.CharLimit = 256
+	pi.SetWidth(50)
+
 	// 起手角色 = flash (若 flash 未配置则退化到 pro)
 	role := "flash"
-	activeID := models.Flash.Model
-	if activeID == "" {
+	providerName, currentEntry := pm.Resolve("flash")
+	if currentEntry.Model == "" {
 		role = "pro"
-		activeID = models.Pro.Model
+		providerName, _ = pm.Resolve("pro")
 	}
+	activeID := currentEntry.Model
 
 	wd, _ := os.Getwd()
 
@@ -323,12 +340,14 @@ func initialModel(models agent.ModelConfig, needsSetup bool, version string, hub
 
 	m := model{
 		mcpMgr:          mcpMgr,
-		mcpAddInput:     mi,
+		providerApiKeyInput: pi,
+			mcpAddInput:     mi,
 		chatContent:     newChatLog(maxChatBytes),
 		currentReply:    &strings.Builder{},
 		chatViewport:    vp,
 		input:           ti,
-		models:          models,
+		pm:              pm,
+		activeProvider:  providerName,
 		activeModelRole: role,
 		activeModelID:   activeID,
 		version:         version,
@@ -528,10 +547,13 @@ func (m model) submitUserInput(input string) (model, tea.Cmd) {
 
 	// 每次新用户消息开始,角色重置回 flash;agent 内部 keyword router 决定本轮真实模型。
 	m.activeModelRole = "flash"
-	m.activeModelID = m.models.Flash.Model
+	pName, pEntry := m.pm.Resolve("flash")
+	m.activeProvider = pName
+	m.activeModelID = pEntry.Model
 	if m.activeModelID == "" {
 		m.activeModelRole = "pro"
-		m.activeModelID = m.models.Pro.Model
+		pName, _ = m.pm.Resolve("pro")
+		m.activeProvider = pName
 	}
 	// 上一轮的 plan 清空
 	m.plan = nil
@@ -541,7 +563,7 @@ func (m model) submitUserInput(input string) (model, tea.Cmd) {
 	m.cancelAgent = cancel
 	cmd, ch := agent.StartStream(
 		ctx,
-		m.models,
+		m.pm,
 		m.history, maxTokens,
 		m.mode,
 		workspace,
@@ -895,6 +917,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
+		}
+
+		// /provider modal:步骤0选 provider,步骤1填 api key
+		if m.showProviderModal {
+			if m.providerStep == 0 {
+				switch msg.String() {
+				case "up", "k":
+					if m.providerSelectIdx > 0 {
+						m.providerSelectIdx--
+					}
+					return m, nil
+				case "down", "j":
+					if m.providerSelectIdx < 3 {
+						m.providerSelectIdx++
+					}
+					return m, nil
+				case "enter":
+					m.providerStep = 1
+					m.providerApiKeyErr = ""
+					m.providerApiKeyInput.SetValue("")
+					return m, nil
+				case "esc", "ctrl+c":
+					m.showProviderModal = false
+					m.input.Focus()
+					return m, nil
+				}
+				return m, nil
+			} else {
+				switch msg.String() {
+				case "enter":
+					m.submitProviderApiKey()
+					return m, nil
+				case "esc":
+					m.providerStep = 0
+					m.providerApiKeyErr = ""
+					return m, nil
+				case "ctrl+c":
+					m.showProviderModal = false
+					m.input.Focus()
+					return m, nil
+				}
+				var c tea.Cmd
+				m.providerApiKeyInput, c = m.providerApiKeyInput.Update(msg)
+				return m, c
+			}
 		}
 
 		// review 审核态:↑/↓ 切换 YES/NO, Enter 确认, Esc 拒绝
@@ -1257,7 +1324,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, agent.ListenToStream(m.streamCh)
 
-	case agent.PlanCreatedMsg:
+		case agent.ProviderSwitchMsg:
+			if m.streamCh == nil {
+				return m, nil
+			}
+			m.activeProvider = msg.To
+			m.activeModelRole = msg.Role
+			switch msg.Reason {
+			case "quota_exhausted":
+				m.chatContent.Append(fmt.Sprintf("\n[配额耗尽,已切换到 %s (%s)]\n", msg.To, msg.Role))
+			case "api_error":
+				m.chatContent.Append(fmt.Sprintf("\n[%s 不可用,已切换到 %s (%s)]\n", msg.From, msg.To, msg.Role))
+			case "auto_continue":
+				m.chatContent.Append(fmt.Sprintf("\n[自动续接 — 仍在 %s (%s)]\n", msg.To, msg.Role))
+			}
+			m.refreshViewport()
+			return m, agent.ListenToStream(m.streamCh)
+
+		case agent.PlanCreatedMsg:
 		if m.streamCh == nil {
 			return m, nil
 		}
@@ -1331,17 +1415,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 这里无需额外动作 — 旧的 trimDisplayTurns 按"10 轮"裁的逻辑已被 chatLog 取代。
 
 		// 检查是否需要触发会话压缩：估算 token 数接近窗口的 70% 时触发。
-		ctxWin := m.models.Pro.ContextWindow
+		_, proEntry := m.pm.Resolve("pro")
+		ctxWin := proEntry.ContextWindow
 		if ctxWin <= 0 {
 			ctxWin = 65536
 		}
-		if m.session != nil && m.models.Pro.Model != "" && !m.compacting && m.lastPromptTokens() >= ctxWin*70/100 {
+		if m.session != nil && proEntry.Model != "" && !m.compacting && m.lastPromptTokens() >= ctxWin*m.pm.CompactionThreshold()/100 {
 			// 拷贝当前 history 快照,异步执行压缩
 			snapshot := make([]agent.ChatMessage, len(m.history))
 			copy(snapshot, m.history)
 			// 上次实际发送的 model + system + tools(刚结束的这轮已写入快照),复刻它命中热缓存。
-			_, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
-			entry := m.entryForModel(lastModel)
+			_, lastProvider, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
+				entry := m.entryForModel(lastProvider, lastModel)
 			m.compacting = true
 			return m, func() tea.Msg {
 				summary, cutIdx, compressedTurns, err := agent.RunCompression(lastSys, lastTools, snapshot, entry, ctxWin)
@@ -1482,6 +1567,23 @@ func (m *model) insertImagePlaceholder(n int) {
 	m.input.InsertString(fmt.Sprintf(" [Image #%d] ", n))
 }
 
+// flashModelID / proModelID / baseURL 从 ProviderManager 取值,供 view/setup_modal 等使用。
+func (m *model) flashModelID() string {
+	_, e := m.pm.Resolve("flash")
+	return e.Model
+}
+func (m *model) proModelID() string {
+	_, e := m.pm.Resolve("pro")
+	return e.Model
+}
+func (m *model) baseURL() string {
+	_, e := m.pm.Resolve("flash")
+	if e.BaseURL == "" {
+		_, e = m.pm.Resolve("pro")
+	}
+	return e.BaseURL
+}
+
 // roleKind 把内部 role 名映射成 chatLog 段 kind。
 // 决定渲染时套哪根色条 — 不再在 raw 里加任何 "**emoji 名**: " 前缀,
 // 身份完全由色条承载,正文跟用户输入保持原貌。
@@ -1617,6 +1719,8 @@ func (m *model) handleSlashCommand(input string) tea.Cmd {
 		if CurrentLang() == LangEN {
 			m.langModalIdx = 1
 		}
+	case "/provider":
+		m.openProviderModal()
 	case "/compact":
 		return m.startManualCompaction()
 	case "/help":
@@ -1632,7 +1736,7 @@ func (m *model) handleSlashCommand(input string) tea.Cmd {
 // 区别只在于不看 token 阈值——用户敲了就压。压不动(历史太小)由 runCompression 返回 err,
 // 经 manual 标记在结果处理处反馈给用户。
 func (m *model) startManualCompaction() tea.Cmd {
-	if m.session == nil || m.models.Pro.Model == "" {
+	if m.session == nil || m.proModelID() == "" {
 		m.appendChat("System", "无可用会话或 Pro 模型,无法压缩")
 		return nil
 	}
@@ -1640,7 +1744,8 @@ func (m *model) startManualCompaction() tea.Cmd {
 		m.appendChat("System", "压缩正在进行中,请稍候")
 		return nil
 	}
-	ctxWin := m.models.Pro.ContextWindow
+	_, proEntry := m.pm.Resolve("pro")
+	ctxWin := proEntry.ContextWindow
 	if ctxWin <= 0 {
 		ctxWin = 65536
 	}
@@ -1648,8 +1753,8 @@ func (m *model) startManualCompaction() tea.Cmd {
 	snapshot := make([]agent.ChatMessage, len(m.history))
 	copy(snapshot, m.history)
 	// 复刻上次实际发送的 model + system + tools,命中热缓存。
-	_, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
-	entry := m.entryForModel(lastModel)
+	_, lastProvider, lastModel, lastSys, lastTools := m.session.LoadPrefixSnapshot()
+	entry := m.entryForModel(lastProvider, lastModel)
 	m.compacting = true
 	m.appendChat("System", "正在压缩会话历史…")
 	return func() tea.Msg {

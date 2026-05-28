@@ -230,6 +230,9 @@ func (m model) View() tea.View {
 	if m.showMcpDelete {
 		mainUI = overlayCentered(mainUI, m.mcpDeleteModalBlock(), m.width, m.height)
 	}
+	if m.showProviderModal {
+		mainUI = overlayCentered(mainUI, m.providerModalBlock(), m.width, m.height)
+	}
 	v := m.wrapView(normalizeFrame(mainUI, m.width, m.height))
 	// 真实终端光标定位到 input 内的 cursor 位置。
 	// textarea.Cursor() 给的 X/Y 是相对 textarea 自身的局部坐标;input 起始 Y =
@@ -237,7 +240,7 @@ func (m model) View() tea.View {
 	// modal 打开时不显示真实光标 —— 避免光标卡在 modal 背后。
 	// cursorBlinkOff 由 cursorBlinkTickMsg 600ms 切一次:亮时塞 Cursor,灭时不塞 —
 	// 不依赖终端的 DECSCUSR blink 支持,VS Code 终端等也能闪。
-	if !m.showSetup && !m.showLangModal && !m.showMcpAdd && !m.showMcpDelete && !m.reviewPending && !m.cursorBlinkOff {
+	if !m.showSetup && !m.showLangModal && !m.showMcpAdd && !m.showMcpDelete && !m.showProviderModal && !m.reviewPending && !m.cursorBlinkOff {
 		if c := m.input.Cursor(); c != nil {
 			c.Position.X += inputGutterWidth
 			c.Position.Y += bodyH + inputTopPad
@@ -460,8 +463,8 @@ func (m model) rightPanelView() string {
 	subtle := lipgloss.NewStyle().Foreground(subtleColor).Render
 
 	// 模型 id 太长就截断,避免把右栏挤变形
-	flashID := truncate(m.models.Flash.Model, rightPanelWidth-8)
-	proID := truncate(m.models.Pro.Model, rightPanelWidth-8)
+	flashID := truncate(m.flashModelID(), rightPanelWidth-8)
+	proID := truncate(m.proModelID(), rightPanelWidth-8)
 
 	// 路径压缩 ~/.../tail
 	cwd := abbreviatePath(m.workspace, rightPanelWidth-2)
@@ -516,9 +519,9 @@ func (m model) rightPanelView() string {
 	rows = append(rows, m.versionLine(bannerInnerW), "")
 
 	// Endpoint section:api host(去 scheme / path)
-	endpoint := m.models.Flash.BaseURL
+	endpoint := m.baseURL()
 	if endpoint == "" {
-		endpoint = m.models.Pro.BaseURL
+		endpoint = m.baseURL()
 	}
 	if endpoint == "" {
 		endpoint = "(not set)"

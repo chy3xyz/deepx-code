@@ -37,14 +37,6 @@ type ModelEntry struct {
 	ContextWindow int // 上下文窗口大小(tokens)
 }
 
-// ModelConfig 双模型配置。Flash 处理简单/查询型任务,Pro 处理复杂/规划型任务。
-// 入口路由(keyword_router.go)决定本轮起手用哪个;每个 plan 节点也可以独立指定 model 字段。
-// 两个 entry 可以共用同一个 BaseURL/APIKey,只 Model 不同(常见场景);也可以完全分离。
-type ModelConfig struct {
-	Flash ModelEntry
-	Pro   ModelEntry
-}
-
 // === 给 TUI 的事件 ===
 
 type TokenMsg string                  // 助手正式回复(content)的文本增量,会展示到 chat
@@ -67,6 +59,14 @@ type ModelSwitchMsg struct {
 	Role    string // "flash" or "pro"
 	ModelID string // 实际 model id
 	Reason  string // 可选,描述路由依据(目前为空,B 方案静默路由)
+}
+
+// ProviderSwitchMsg 通知 UI provider 已切换(配额耗尽 / 回退)。
+type ProviderSwitchMsg struct {
+	From   string // 旧 provider 名
+	To     string // 新 provider 名
+	Role   string // "flash" or "pro"
+	Reason string // "quota_exhausted" / "api_error" / "auto_continue"
 }
 
 // HistoryUpdateMsg 让 UI 用最新的 history 替换本地副本(包含 assistant tool_calls / tool 结果)
@@ -377,13 +377,13 @@ func BuildSystemPrompt(workspace, skillCatalog, summary string) string {
 
 func StartStream(
 	ctx context.Context,
-	models ModelConfig,
+	pm *ProviderManager,
 	history []ChatMessage,
 	maxTokens int,
 	mode AgentMode,
 	workspace string,
-	skillCatalog string, // 见下方 system prompt 注入逻辑;空串表示当前没有 skill
-	summary string, // 会话压缩摘要,垫在 system prompt 末尾;空串表示尚未压缩
+	skillCatalog string,
+	summary string,
 ) (tea.Cmd, <-chan tea.Msg) {
 	ch := make(chan tea.Msg, 128)
 
@@ -400,39 +400,38 @@ func StartStream(
 			}
 		}
 		if workspace != "" {
-			// 在首轮注入 system 提示:当前工作目录 + 任务拆解 + plan 节点的 model 选择指南。
-			// 入口模型已经由 keyword router 决定(flash 或 pro);模型自行判断要不要 CreatePlan 拆任务。
 			if len(convo) == 0 || convo[0].Role != "system" {
 				sysBase := BuildSystemPrompt(workspace, skillCatalog, summary)
 				convo = append([]ChatMessage{{Role: "system", Content: sysBase}}, convo...)
 			}
 		}
 
-		// 当前活跃角色,起手 flash。升级到 pro 后不回头。
+		// 起手角色 flash,通过 ProviderManager 解析得到实际 entry。
 		role := tools.RoleFlash
-		currentEntry := models.Flash
+		providerName, currentEntry := pm.Resolve(role)
 		if currentEntry.Model == "" {
-			currentEntry = models.Pro // 退化:flash 未设时,直接用 pro
 			role = tools.RolePro
+			providerName, currentEntry = pm.Resolve(role)
 		}
 
-		// 入口路由:纯本地关键词 + 长度判定,零延迟,无 LLM 调用。
-		// 命中复杂关键词 / 消息 > 500 字 → pro;否则 flash。
-		// 本轮锁定该模型,主循环不再切换 — plan 节点可独立指定 model 字段,
-		// 由 sub-agent 按节点要求路由,跟"起手模型"解耦。
-		if latestUserTask != "" && models.Pro.Model != "" {
+		// 入口路由:纯本地关键词 + 长度判定。
+		// 注意:pro 可用性由 ProviderManager.Resolve("pro") 判定,不直接读 models.Pro。
+		if latestUserTask != "" {
 			choice := RouteByKeyword(latestUserTask)
 			if choice == "pro" {
-				role = tools.RolePro
-				currentEntry = models.Pro
+				proName, proEntry := pm.Resolve(tools.RolePro)
+				if proEntry.Model != "" {
+					role = tools.RolePro
+					providerName = proName
+					currentEntry = proEntry
+				}
 			}
 		}
 		ch <- ModelSwitchMsg{Role: role, ModelID: currentEntry.Model}
 
 		toolSpecs := buildToolSpecs(mode)
 
-		// 发出本轮"实际发送"的前缀快照(system 文本 + tool specs JSON),供 TUI 持久化:
-		// 重启变化检测 + 缓存友好压缩复刻旧前缀。tool specs 随 mode/role 变,故必须存实际值。
+		// 发出本轮前缀快照,加 provider 维度。
 		{
 			sysContent := ""
 			if len(convo) > 0 && convo[0].Role == "system" {
@@ -441,203 +440,338 @@ func StartStream(
 			ch <- PrefixSnapshotMsg{Model: currentEntry.Model, SystemPrompt: sysContent, ToolSpecsJSON: MarshalToolSpecs(toolSpecs)}
 		}
 
-		// 100 轮上限给复杂多步任务留足空间(read → analyze → edit → test → fix 这种循环)。
-		// 触顶通常说明 LLM 在死循环或反复试错,需要返回错误让用户介入。
-		for round := 0; round < mainAgentMaxRounds; round++ {
-			// 检查 context 是否取消(ESC/退出),提前退出不卡后台
+		// 自动续接:外层循环无上限,内层工具轮次到上限后压缩 + 重置。
+		autoContinueIdx := 0
+		for {
 			if ctx.Err() != nil {
 				return
 			}
-			// 不再主动 strip reasoning_content:本轮不切换模型,thinking 模型仍按需回传,
-			// 非 thinking 模型对 history 里的字段视而不见。若个别模型报错,
-			// streamOnce 仍有 errReasoningRequired retry 兜底。
-			assistantContent, reasoning, toolCalls, usage, err := streamOnce(
-				ctx,
-				currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
-				convo, maxTokens, toolSpecs, ch,
-			)
-			if err != nil {
-				// context 取消是主动中断,不报 Error 给 UI。
-				if errors.Is(err, context.Canceled) {
+
+			// 内层工具轮次循环
+			for round := 0; round < mainAgentMaxRounds; round++ {
+				if ctx.Err() != nil {
 					return
 				}
-				ch <- StreamErrMsg{err}
-				return
-			}
-			// 主 agent 的 token 用量发给 TUI 显示。
-			if usage != nil {
-				ch <- UsageMsg{Usage: *usage}
-			}
 
-			// 把本轮 assistant 回复写入历史(含 reasoning_content,thinking 模型下轮需要)
-			convo = append(convo, ChatMessage{
-				Role:             "assistant",
-				Content:          assistantContent,
-				ReasoningContent: reasoning,
-				ToolCalls:        toolCalls,
-			})
-
-			if len(toolCalls) == 0 {
-				ch <- HistoryUpdateMsg{History: convo}
-				ch <- StreamDoneMsg{}
-				return
-			}
-
-			// 执行每个工具调用,把结果加进 convo。
-			// 这些工具被 deepx 拦截 (不走 Executor):
-			//   - CreatePlan         → 解析后产 PlanCreatedMsg,触发 DAG 调度(派并发子 agent)
-			//   - Todo               → 解析后产 PlanCreatedMsg 刷新可见清单,主 agent 自己执行,不派子 agent
-			//   - UpdatePlanStatus   → 解析后产 TaskStatusMsg,UI 更新单项状态
-			//   - SwitchModel        → 改本轮 currentEntry / role,通过 ModelSwitchMsg 通知 UI
-			// 拦截后仍要给 LLM 一个 fake tool result,让 OpenAI 工具循环能正常推进。
-			for _, tc := range toolCalls {
-				// review 模式:对 Write/Update/Bash 发起审核
-				var reviewCh chan bool
-				if mode == AgentMode_Review && isReviewable(tc.Function.Name) {
-					reviewCh = make(chan bool, 1)
+				// 接近上限前预警(80%):给一次压缩机会,但不打断当前轮次。
+				if round == mainAgentMaxRounds*80/100 && autoContinueIdx == 0 {
+					// 先尝试压缩,不清空 history —— 只是提前压一次减少续接时的压缩量。
 				}
-				ch <- ToolCallStartMsg{Name: tc.Function.Name, Args: tc.Function.Arguments, ReviewCh: reviewCh}
-				if reviewCh != nil && !<-reviewCh {
-					ch <- ToolCallResultMsg{Name: tc.Function.Name, Output: "操作已被用户拒绝 (review 模式)", Success: false}
+
+				// 预扣配额
+				estTokens := int64(EstimateHistoryTokens(convo) + maxTokens)
+				if !pm.Reserve(estTokens) {
+					// 配额不足,尝试 fallback
+					fallbackName, fallbackEntry, ok := pm.Fallback(role)
+					if !ok {
+						ch <- StreamErrMsg{fmt.Errorf("所有 provider 配额已耗尽(%s)", providerName)}
+						return
+					}
+					ch <- ProviderSwitchMsg{From: providerName, To: fallbackName, Role: role, Reason: "quota_exhausted"}
+					providerName = fallbackName
+					currentEntry = fallbackEntry
+				}
+
+				assistantContent, reasoning, toolCalls, usage, err := streamOnce(
+					ctx,
+					currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
+					convo, maxTokens, toolSpecs, ch,
+				)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					// API 错误:尝试 fallback 后重试一次
+					pm.MarkFailure(providerName)
+					fallbackName, fallbackEntry, ok := pm.Fallback(role)
+					if !ok {
+						ch <- StreamErrMsg{err}
+						return
+					}
+					ch <- ProviderSwitchMsg{From: providerName, To: fallbackName, Role: role, Reason: "api_error"}
+					providerName = fallbackName
+					currentEntry = fallbackEntry
+					// 重试当前轮次
+					assistantContent, reasoning, toolCalls, usage, err = streamOnce(
+						ctx,
+						currentEntry.APIKey, currentEntry.BaseURL, currentEntry.Model,
+						convo, maxTokens, toolSpecs, ch,
+					)
+					if err != nil {
+						if errors.Is(err, context.Canceled) {
+							return
+						}
+						ch <- StreamErrMsg{err}
+						return
+					}
+				}
+				// 记录实际用量
+				if usage != nil {
+					pm.RecordUsage(providerName, usage.PromptTokens, usage.CompletionTokens, usage.PromptCacheHitTokens, usage.PromptCacheMissTokens)
+					ch <- UsageMsg{Usage: *usage}
+				}
+
+				convo = append(convo, ChatMessage{
+					Role:             "assistant",
+					Content:          assistantContent,
+					ReasoningContent: reasoning,
+					ToolCalls:        toolCalls,
+				})
+
+				if len(toolCalls) == 0 {
+					ch <- HistoryUpdateMsg{History: convo}
+					ch <- StreamDoneMsg{}
+					return
+				}
+
+				// 执行每个工具调用,把结果加进 convo。
+				for _, tc := range toolCalls {
+					var reviewCh chan bool
+					if mode == AgentMode_Review && isReviewable(tc.Function.Name) {
+						reviewCh = make(chan bool, 1)
+					}
+					ch <- ToolCallStartMsg{Name: tc.Function.Name, Args: tc.Function.Arguments, ReviewCh: reviewCh}
+					if reviewCh != nil && !<-reviewCh {
+						ch <- ToolCallResultMsg{Name: tc.Function.Name, Output: "操作已被用户拒绝 (review 模式)", Success: false}
+						convo = append(convo, ChatMessage{
+							Role:       "tool",
+							ToolCallID: tc.ID,
+							Name:       tc.Function.Name,
+							Content:    "操作已被用户拒绝 (review 模式)",
+						})
+						continue
+					}
+
+					var result tools.ToolResult
+					switch tc.Function.Name {
+					case "CreatePlan":
+						plans, perr := parseCreatePlanArgs(tc.Function.Arguments)
+						if perr != nil {
+							result = tools.ToolResult{Output: perr.Error(), Success: false}
+						} else {
+							ch <- PlanCreatedMsg{Plans: plans}
+							nodes := flattenPlans(plans)
+							exec := func(n *schedulerNode, preds map[string]string) (string, error) {
+								res := runSubAgent(ctx, subAgentInput{
+									PM:           pm,
+									Entry:        resolveModelEntry(n.Model, pm),
+									NodeID:       n.ID,
+									NodeTitle:    n.Title,
+									UserTask:     latestUserTask,
+									Predecessors: preds,
+									Workspace:    workspace,
+									SkillCatalog: skillCatalog,
+									MaxTokens:    maxTokens,
+									Mode:         mode,
+								})
+								if res.Err != nil {
+									return "", res.Err
+								}
+								return res.Summary, nil
+							}
+							final := runDAG(ctx, nodes, exec, ch)
+							var sb strings.Builder
+							sb.WriteString(fmt.Sprintf("已执行完毕,共 %d 个节点。\n", len(final)))
+							successCount := 0
+							for _, n := range final {
+								icon := "?"
+								switch n.Status {
+								case PlanStatusDone:
+									icon = "✓"
+									successCount++
+								case PlanStatusFailed:
+									icon = "✗"
+								case PlanStatusBlocked:
+									icon = "⏸"
+								}
+								sb.WriteString(fmt.Sprintf("  %s [%s] %s — %s\n", icon, n.ID, n.Title, n.Summary))
+							}
+							sb.WriteString(fmt.Sprintf("\n%d/%d 成功。请基于以上结果给用户写一段简洁的最终总结。", successCount, len(final)))
+							result = tools.ToolResult{Output: sb.String(), Success: successCount > 0}
+						}
+					case "Todo":
+						items, perr := parseTodoArgs(tc.Function.Arguments)
+						if perr != nil {
+							result = tools.ToolResult{Output: perr.Error(), Success: false}
+						} else {
+							ch <- PlanCreatedMsg{Plans: items}
+							done := 0
+							for _, it := range items {
+								if it.Status == PlanStatusDone {
+									done++
+								}
+							}
+							result = tools.ToolResult{
+								Output:  fmt.Sprintf("待办已更新:%d/%d 完成。继续按清单执行,每开始/完成一步就重发整张 todos 更新状态。", done, len(items)),
+								Success: true,
+							}
+						}
+					case "UpdatePlanStatus":
+						id, st, sum, perr := parseUpdatePlanStatusArgs(tc.Function.Arguments)
+						if perr != nil {
+							result = tools.ToolResult{Output: perr.Error(), Success: false}
+						} else {
+							ch <- TaskStatusMsg{ID: id, Status: st, Summary: sum}
+							result = tools.ToolResult{
+								Output:  fmt.Sprintf("已记录: %s = %s", id, st),
+								Success: true,
+							}
+						}
+					case "SwitchModel":
+						reason := parseSwitchModelReason(tc.Function.Arguments)
+						if role == tools.RolePro {
+							result = tools.ToolResult{
+								Output:  "已经在 pro 模型,无需切换。继续完成任务即可。",
+								Success: true,
+							}
+						} else {
+							proName, proEntry := pm.Resolve(tools.RolePro)
+							if proEntry.Model == "" {
+								result = tools.ToolResult{
+									Output:  "pro 模型未配置,无法升级。继续用 flash 处理。",
+									Success: false,
+								}
+							} else {
+								role = tools.RolePro
+								providerName = proName
+								currentEntry = proEntry
+								ch <- ModelSwitchMsg{Role: role, ModelID: currentEntry.Model, Reason: reason}
+								result = tools.ToolResult{
+									Output:  fmt.Sprintf("已切到 pro 模型 (%s/%s)。本轮剩余请求 + reasoning 用 pro 处理。", providerName, currentEntry.Model),
+									Success: true,
+								}
+							}
+						}
+					default:
+						result = executeTool(tc, mode)
+					}
+
+					ch <- ToolCallResultMsg{Name: tc.Function.Name, Output: result.Output, Success: result.Success}
 					convo = append(convo, ChatMessage{
 						Role:       "tool",
 						ToolCallID: tc.ID,
 						Name:       tc.Function.Name,
-						Content:    "操作已被用户拒绝 (review 模式)",
+						Content:    result.Output,
 					})
-					continue
 				}
-
-				var result tools.ToolResult
-				switch tc.Function.Name {
-				case "CreatePlan":
-					plans, perr := parseCreatePlanArgs(tc.Function.Arguments)
-					if perr != nil {
-						result = tools.ToolResult{Output: perr.Error(), Success: false}
-					} else {
-						// 1. 通知 UI 渲染 plan 树
-						ch <- PlanCreatedMsg{Plans: plans}
-						// 2. 拍平成 DAG 节点并同步执行
-						nodes := flattenPlans(plans)
-						exec := func(n *schedulerNode, preds map[string]string) (string, error) {
-							res := runSubAgent(ctx, subAgentInput{
-								Models:       models,
-								Entry:        resolveModelEntry(n.Model, models),
-								NodeID:       n.ID,
-								NodeTitle:    n.Title,
-								UserTask:     latestUserTask,
-								Predecessors: preds,
-								Workspace:    workspace,
-								SkillCatalog: skillCatalog,
-								MaxTokens:    maxTokens,
-								Mode:         mode,
-							})
-							if res.Err != nil {
-								return "", res.Err
-							}
-							return res.Summary, nil
-						}
-						final := runDAG(ctx, nodes, exec, ch)
-						// 3. 拼汇总 ToolResult 给 pro,让它写最终给用户的总结
-						var summary strings.Builder
-						summary.WriteString(fmt.Sprintf("已执行完毕,共 %d 个节点。\n", len(final)))
-						successCount := 0
-						for _, n := range final {
-							icon := "?"
-							switch n.Status {
-							case PlanStatusDone:
-								icon = "✓"
-								successCount++
-							case PlanStatusFailed:
-								icon = "✗"
-							case PlanStatusBlocked:
-								icon = "⏸"
-							}
-							summary.WriteString(fmt.Sprintf("  %s [%s] %s — %s\n", icon, n.ID, n.Title, n.Summary))
-						}
-						summary.WriteString(fmt.Sprintf("\n%d/%d 成功。请基于以上结果给用户写一段简洁的最终总结。", successCount, len(final)))
-						result = tools.ToolResult{
-							Output:  summary.String(),
-							Success: successCount > 0,
-						}
-					}
-				case "Todo":
-					// 主 agent 自驱动的可见待办清单:全量快照覆盖当前 planState,不派子 agent。
-					// 复用 PlanCreatedMsg 让 UI 直接按各项 status 渲染 checkbox。
-					items, perr := parseTodoArgs(tc.Function.Arguments)
-					if perr != nil {
-						result = tools.ToolResult{Output: perr.Error(), Success: false}
-					} else {
-						ch <- PlanCreatedMsg{Plans: items}
-						done := 0
-						for _, it := range items {
-							if it.Status == PlanStatusDone {
-								done++
-							}
-						}
-						result = tools.ToolResult{
-							Output:  fmt.Sprintf("待办已更新:%d/%d 完成。继续按清单执行,每开始/完成一步就重发整张 todos 更新状态。", done, len(items)),
-							Success: true,
-						}
-					}
-				case "UpdatePlanStatus":
-					id, st, summary, perr := parseUpdatePlanStatusArgs(tc.Function.Arguments)
-					if perr != nil {
-						result = tools.ToolResult{Output: perr.Error(), Success: false}
-					} else {
-						ch <- TaskStatusMsg{ID: id, Status: st, Summary: summary}
-						result = tools.ToolResult{
-							Output:  fmt.Sprintf("已记录: %s = %s", id, st),
-							Success: true,
-						}
-					}
-				case "SwitchModel":
-					// 单向升级到 pro。已经在 pro 是 no-op,flash → pro 实际换 currentEntry。
-					// 切换立即生效:本轮工具循环下一次 streamOnce 用新 entry。
-					reason := parseSwitchModelReason(tc.Function.Arguments)
-					if role == tools.RolePro {
-						result = tools.ToolResult{
-							Output:  "已经在 pro 模型,无需切换。继续完成任务即可。",
-							Success: true,
-						}
-					} else if models.Pro.Model == "" {
-						result = tools.ToolResult{
-							Output:  "pro 模型未配置(model.yaml 里 pro.model 为空),无法升级。继续用 flash 处理。",
-							Success: false,
-						}
-					} else {
-						role = tools.RolePro
-						currentEntry = models.Pro
-						// 工具表不随角色变(各角色一致),无需重算 toolSpecs。
-						ch <- ModelSwitchMsg{Role: role, ModelID: currentEntry.Model, Reason: reason}
-						result = tools.ToolResult{
-							Output:  fmt.Sprintf("已切到 pro 模型 (%s)。本轮剩余请求 + reasoning 用 pro 处理。", currentEntry.Model),
-							Success: true,
-						}
-					}
-				default:
-					result = executeTool(tc, mode)
-				}
-
-				ch <- ToolCallResultMsg{
-					Name:    tc.Function.Name,
-					Output:  result.Output,
-					Success: result.Success,
-				}
-				convo = append(convo, ChatMessage{
-					Role:       "tool",
-					ToolCallID: tc.ID,
-					Name:       tc.Function.Name,
-					Content:    result.Output,
-				})
+				ch <- HistoryUpdateMsg{History: convo}
 			}
-			ch <- HistoryUpdateMsg{History: convo}
-		}
 
-		ch <- StreamErrMsg{fmt.Errorf("超过工具调用轮数上限")}
+			// === 轮次触顶,自动续接 ===
+			autoContinueIdx++
+
+			// 执行压缩:复刻当前前缀命中热缓存
+			compactionThreshold := pm.CompactionThreshold()
+			keepTarget := currentEntry.ContextWindow * compactionThreshold / 100
+			if keepTarget <= 0 {
+				keepTarget = 65536 * compactionThreshold / 100
+			}
+			ctxWin := currentEntry.ContextWindow
+			if ctxWin <= 0 {
+				ctxWin = 65536
+			}
+
+			newSummary, cutIdx, _, compactErr := runAutoCompression(currentEntry, convo, ctxWin, autoContinueIdx)
+			if compactErr != nil {
+				// 压缩失败(历史太小/不足 20%):仍尝试截断一半继续
+				cutIdx = len(convo) / 2
+				if cutIdx < 1 {
+					ch <- StreamErrMsg{fmt.Errorf("超过工具调用轮数上限,且无法压缩续接")}
+					return
+				}
+			}
+			if newSummary != "" {
+				summary = newSummary
+				// 重建 system prompt 含新摘要
+				if len(convo) > 0 && convo[0].Role == "system" {
+					convo[0].Content = BuildSystemPrompt(workspace, skillCatalog, summary)
+				}
+			}
+			convo = append([]ChatMessage(nil), convo[cutIdx:]...)
+
+			ch <- ProviderSwitchMsg{From: providerName, To: providerName, Role: role, Reason: "auto_continue"}
+		}
 	}()
 
 	return ListenToStream(ch), ch
+}
+
+// runAutoCompression 自动续接时的压缩:轻量版,用当前 entry 走缓存友好路径。
+func runAutoCompression(entry ModelEntry, convo []ChatMessage, ctxWin int, seq int) (summary string, cutIdx int, compressedTurns int, err error) {
+	totalUsers := 0
+	for _, msg := range convo {
+		if msg.Role == "user" {
+			totalUsers++
+		}
+	}
+	if totalUsers <= 2 {
+		return "", 0, 0, fmt.Errorf("user 轮数不足,无需压缩")
+	}
+
+	keepTarget := ctxWin * 20 / 100
+	budgetStart := 0
+	cc := 0
+	for i := len(convo) - 1; i >= 0; i-- {
+		cc += MsgTokens(convo[i])
+		if convo[i].Role == "user" && cc >= keepTarget {
+			budgetStart = i
+			break
+		}
+	}
+	turnStart := len(convo)
+	uc := 0
+	for i := len(convo) - 1; i >= 0; i-- {
+		if convo[i].Role == "user" {
+			uc++
+			if uc >= keepRecentTurns {
+				turnStart = i
+				break
+			}
+		}
+	}
+	keepStart := budgetStart
+	if turnStart < keepStart {
+		keepStart = turnStart
+	}
+	if keepStart <= 0 {
+		return "", 0, 0, fmt.Errorf("历史不足 20%% 窗口,无需压缩")
+	}
+	cutIdx = keepStart
+
+	lastMode := "auto"
+	for _, msg := range convo[:keepStart] {
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "当前模式: plan") {
+			lastMode = "plan"
+		}
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "当前模式: auto") {
+			lastMode = "auto"
+		}
+	}
+
+	summaryMax := ctxWin * 3 / 100
+	if summaryMax < 256 {
+		summaryMax = 256
+	}
+
+	// 冷路径:拍平历史走独立 system
+	var inputBuf strings.Builder
+	for _, msg := range convo[:keepStart] {
+		inputBuf.WriteString("[" + msg.Role + "]\n" + msg.Content + "\n\n")
+	}
+	convo2 := []ChatMessage{
+		{Role: "system", Content: compressionPrompt},
+		{Role: "user", Content: inputBuf.String()},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), compactionTimeout)
+	defer cancel()
+	summary, err = CallOnce(ctx, entry.APIKey, entry.BaseURL, entry.Model, convo2, summaryMax)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if !strings.Contains(summary, "最后模式:") {
+		summary += "\n最后模式: " + lastMode
+	}
+	return summary, cutIdx, 0, nil
 }
 
 // streamOnce 发起一次 chat/completions 请求,返回 (content, reasoning_content, tool_calls, usage, error)。

@@ -1,7 +1,7 @@
 # deepx one-click installer (Windows / PowerShell)
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/chy3xyz/deepx-code/main/scripts/install.ps1 | iex
 #
 # 直接运行(克隆仓库后):
 #   .\scripts\install.ps1
@@ -26,7 +26,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # 固定配置
 # ---------------------------------------------------------------------------
-$Owner   = 'itmisx'
+$Owner   = 'chy3xyz'
 $Repo    = 'deepx-code'
 $BinName = 'deepx.exe'
 

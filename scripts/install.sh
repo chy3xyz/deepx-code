@@ -2,7 +2,7 @@
 # deepx one-click installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/chy3xyz/deepx-code/main/scripts/install.sh | bash
 #   bash scripts/install.sh [--version vX.Y.Z] [--prefix ~/.local] [--from-source]
 #
 # 默认:从 GitHub Releases 拉取最新预编译二进制到 ~/.local/bin/deepx,并把 ~/.local/bin
@@ -15,7 +15,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # 配置:仓库地址固定写死,改动只需要更新这里。
 # ---------------------------------------------------------------------------
-OWNER="itmisx"
+OWNER="chy3xyz"
 REPO="deepx-code"
 BIN_NAME="deepx"
 

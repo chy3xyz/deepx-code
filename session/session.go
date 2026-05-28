@@ -60,8 +60,9 @@ type metaFile struct {
 // 也避免 tool specs JSON 被二次转义。见 summaryFile / lastPromptFile / lastToolsFile。
 type stateFile struct {
 	LastUsage   *usageSnapshot `json:"last_usage,omitempty"`   // 上轮 API 调用 token 用量,启动时回填 Usage section
-	PrefixSig   string         `json:"prefix_sig,omitempty"`   // hash(系统提示词+工具+mcp),重启检测前缀变化
-	PrefixModel string         `json:"prefix_model,omitempty"` // 上次实际发送用的 model ID(缓存按模型分,压缩需同模型才命中)
+	PrefixSig      string         `json:"prefix_sig,omitempty"`      // hash(系统提示词+工具+mcp),重启检测前缀变化
+	PrefixProvider string         `json:"prefix_provider,omitempty"` // 上次实际发送用的 provider 名
+	PrefixModel    string         `json:"prefix_model,omitempty"`    // 上次实际发送用的 model ID
 
 	// Summary 已迁出到独立裸文件;此字段仅用于读取旧版本遗留的 state.json(向后兼容)。
 	Summary string `json:"summary,omitempty"`
@@ -158,8 +159,8 @@ func (m *Manager) SaveSummary(text string) error {
 }
 
 // SavePrefixSnapshot 记录"上次实际发送"的前缀快照:签名进 state.json,system 文本和 tool specs
-// 各进裸文件(避免高频整体重写大 JSON + tool specs 二次转义)。失败静默,不影响主流程。
-func (m *Manager) SavePrefixSnapshot(sig, model, systemPrompt, toolSpecsJSON string) {
+// 各进裸文件。provider 和 model 分开存,缓存按 provider+model 双维度分。
+func (m *Manager) SavePrefixSnapshot(sig, provider, model, systemPrompt, toolSpecsJSON string) {
 	m.writeRaw(lastPromptFile, systemPrompt)
 	m.writeRaw(lastToolsFile, toolSpecsJSON)
 	path := filepath.Join(m.rootDir, "state.json")
@@ -168,6 +169,7 @@ func (m *Manager) SavePrefixSnapshot(sig, model, systemPrompt, toolSpecsJSON str
 		_ = json.Unmarshal(data, &s)
 	}
 	s.PrefixSig = sig
+	s.PrefixProvider = provider
 	s.PrefixModel = model
 	data, _ := json.MarshalIndent(s, "", "  ")
 	_ = os.WriteFile(path, data, 0o644)
@@ -183,17 +185,18 @@ func (m *Manager) PrefixSnapshotTime() (time.Time, bool) {
 	return fi.ModTime(), true
 }
 
-// LoadPrefixSnapshot 读取上次的前缀快照(签名/model 来自 state.json,system/tools 来自裸文件)。
-func (m *Manager) LoadPrefixSnapshot() (sig, model, systemPrompt, toolSpecsJSON string) {
+// LoadPrefixSnapshot 读取上次的前缀快照(provider/sig/model 来自 state.json,system/tools 来自裸文件)。
+func (m *Manager) LoadPrefixSnapshot() (sig, provider, model, systemPrompt, toolSpecsJSON string) {
 	path := filepath.Join(m.rootDir, "state.json")
 	if data, err := os.ReadFile(path); err == nil {
 		var s stateFile
 		if json.Unmarshal(data, &s) == nil {
 			sig = s.PrefixSig
+			provider = s.PrefixProvider
 			model = s.PrefixModel
 		}
 	}
-	return sig, model, m.readRaw(lastPromptFile), m.readRaw(lastToolsFile)
+	return sig, provider, model, m.readRaw(lastPromptFile), m.readRaw(lastToolsFile)
 }
 
 // SaveUsage 写入 last_usage 字段。失败静默,不影响主流程。

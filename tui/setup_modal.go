@@ -11,15 +11,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// overlayCentered 把 fg(modal)叠在 bg(主 UI)上居中显示。
-// 实现:
-//  1. 拆 bg 和 fg 成行;算出 fg 的最大显示宽度(以 ansi.StringWidth 测,跟终端实际渲染一致)
-//  2. 居中位置:startY = (height - fgHeight)/2, startX = (width - fgWidth)/2
-//  3. 对每一行 fg,用 ansi.Cut 把对应 bg 行的 [startX, startX+fgW) 区间挖掉换成 fg 内容
-//  4. 重新 join 输出
-//
-// bg 太短(行数少于 startY+fgH)时,缺失行不补,modal 会被截断。这种情况下终端高度不够,
-// 不在 modal 区也没什么意义。
 func overlayCentered(bg, fg string, width, height int) string {
 	fgLines := strings.Split(strings.TrimRight(fg, "\n"), "\n")
 	fgH := len(fgLines)
@@ -50,12 +41,8 @@ func overlayCentered(bg, fg string, width, height int) string {
 	return strings.Join(bgLines, "\n")
 }
 
-// spliceLineCells 把 fg 的所有 cell 拼到 bg 的 [atCol, atCol+fgW) 区间,
-// 保留 bg 在该区间前后的内容(连同 ANSI 转义)。
-// 用 ansi.Cut 处理 ANSI 边界,避免 bg 的 SGR 状态污染 fg 或 fg 之后内容。
 func spliceLineCells(bg, fg string, atCol, fgW int) string {
 	pre := ansi.Cut(bg, 0, atCol)
-	// bg 在 atCol 之前太短 → 补空格到 atCol 列,保证 fg 起始位置对齐
 	if preW := ansi.StringWidth(pre); preW < atCol {
 		pre += strings.Repeat(" ", atCol-preW)
 	}
@@ -66,8 +53,6 @@ func spliceLineCells(bg, fg string, atCol, fgW int) string {
 	return pre + fg + post
 }
 
-// setupModalBlock 只渲染 modal 本身(不放置),供 overlay 使用。
-// View() 时把这个 block 叠在 mainUI 上,所以这里不能调 lipgloss.Place 占满屏。
 func (m model) setupModalBlock() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
@@ -119,15 +104,6 @@ func (m model) setupModalBlock() string {
 		Render(content)
 }
 
-// submitSetup 处理 modal 内 Enter 的提交逻辑:
-//   - 校验输入非空
-//   - 用 config.Default 构造 yaml(沿用之前模板)
-//   - 落盘
-//   - 重新 Load(保证内存版本和磁盘一致)
-//   - 把 model 内的 m.models 替换为新配置
-//   - 关闭 modal,把焦点交回主输入框
-//
-// 失败时设置 setupErr,modal 留着等用户重试。
 func (m *model) submitSetup() tea.Cmd {
 	val := strings.TrimSpace(m.setupInput.Value())
 	if val == "" {
@@ -144,17 +120,13 @@ func (m *model) submitSetup() tea.Cmd {
 		m.setupErr = fmt.Sprintf(T("setup.error.reload"), err)
 		return nil
 	}
-	m.models = agent.ModelConfig{
-		Flash: agent.ModelEntry(loaded.Flash),
-		Pro:   agent.ModelEntry(loaded.Pro),
-	}
+	m.pm = agent.NewProviderManager(loaded)
 	m.activeModelRole = "flash"
-	m.activeModelID = m.models.Flash.Model
+	m.activeModelID = m.flashModelID()
 	if m.activeModelID == "" {
 		m.activeModelRole = "pro"
-		m.activeModelID = m.models.Pro.Model
+		m.activeModelID = m.proModelID()
 	}
-	// 重置 modal 状态
 	m.showSetup = false
 	m.setupRequired = false
 	m.setupErr = ""
@@ -163,12 +135,10 @@ func (m *model) submitSetup() tea.Cmd {
 	m.input.Focus()
 
 	path, _ := config.Path()
-	// 反斜杠转义已在 renderMarkdown 渲染层统一处理(见 backslashSentinel),这里不必再包反引号。
 	m.appendChat("System", T("setup.saved_to")+path)
 	return nil
 }
 
-// openSetupModal 给 /config 命令用:把当前面板切到 modal,允许 Esc 取消。
 func (m *model) openSetupModal() {
 	m.showSetup = true
 	m.setupRequired = false

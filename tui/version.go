@@ -17,7 +17,7 @@ import (
 
 // 版本相关常量。repo 写死指向上游,后续 fork 自己跑的话改这里。
 const (
-	githubRepoOwner = "itmisx"
+	githubRepoOwner = "chy3xyz"
 	githubRepoName  = "deepx-code"
 	upgradeCheckTTL = 6 * time.Hour // 缓存 6 小时,避免频繁打 GitHub API
 )

@@ -22,8 +22,8 @@ func buildSubAgentToolSpecs(mode AgentMode) []tools.OpenAIToolSpec {
 // subAgentInput 是一次子 agent 调用的全部依赖。
 // 由 runDAG 的 exec 回调按节点上下文构造,主 agent 不直接调用。
 type subAgentInput struct {
-	Models       ModelConfig // 整套配置,留作扩展用(目前不直接消费)
-	Entry        ModelEntry  // 本节点选定的连接参数 (BaseURL/Model/APIKey)
+	PM           *ProviderManager // 多 provider 管理,子 agent 复用同一套配额/回退
+	Entry        ModelEntry       // 本节点选定的连接参数 (BaseURL/Model/APIKey)
 	NodeID       string
 	NodeTitle    string
 	UserTask     string            // 用户原始消息,作为背景给子 agent
@@ -185,23 +185,21 @@ func runSubAgent(ctx context.Context, in subAgentInput) subAgentResult {
 	return subAgentResult{Err: fmt.Errorf("子 agent [%s] 超过 %d 轮工具调用上限", in.NodeID, subAgentMaxRounds)}
 }
 
-// resolveModelEntry 把 plan/task 里 "flash" / "pro" 字符串映射到 ModelConfig 里的完整 entry。
-// roleHint 解析:
-//   - "pro" / "Pro" → 返回 cfg.Pro(若有 model id)
-//   - "flash" / "" / 其他 → 返回 cfg.Flash(若有 model id),否则退到 cfg.Pro
-//
-// 兜底逻辑保证不会返回空 entry,即使节点的 model 字段误填也能跑。
-func resolveModelEntry(roleHint string, cfg ModelConfig) ModelEntry {
+// resolveModelEntry 把 plan/task 里 "flash" / "pro" 字符串映射到 ProviderManager 里的完整 entry。
+func resolveModelEntry(roleHint string, pm *ProviderManager) ModelEntry {
 	switch strings.ToLower(strings.TrimSpace(roleHint)) {
 	case "pro":
-		if cfg.Pro.Model != "" {
-			return cfg.Pro
+		_, entry := pm.Resolve(tools.RolePro)
+		if entry.Model != "" {
+			return entry
 		}
 	case "flash", "":
 		// 走默认
 	}
-	if cfg.Flash.Model != "" {
-		return cfg.Flash
+	_, entry := pm.Resolve(tools.RoleFlash)
+	if entry.Model != "" {
+		return entry
 	}
-	return cfg.Pro
+	_, entry = pm.Resolve(tools.RolePro)
+	return entry
 }
